@@ -1,0 +1,3 @@
+/retyc-k8s-csi
+/dist
+deploy/secret.yaml

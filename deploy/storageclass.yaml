@@ -1,0 +1,13 @@
+# No per-dataroom capacity enforcement on the backend (see the plan) — requested PVC sizes are
+# accepted best-effort and not actually limited.
+#
+# No CSI secret parameters here: this POC uses one shared Retyc identity for the whole cluster,
+# injected directly into the controller/node pods' environment via deploy/secret.yaml.example
+# (envFrom), not per-StorageClass CSI secrets — see the plan's "single shared identity" decision.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: retyc-rwx
+provisioner: csi.retyc.com
+reclaimPolicy: Delete
+volumeBindingMode: Immediate

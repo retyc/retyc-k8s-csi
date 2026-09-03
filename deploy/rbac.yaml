@@ -1,0 +1,51 @@
+# Standard external-provisioner RBAC (the same shape every CSI driver's controller sidecar
+# needs), plus a minimal ServiceAccount for the node plugin (node-driver-registrar needs no
+# special permissions beyond talking to kubelet over its local socket).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: retyc-csi-controller
+  namespace: kube-system
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: retyc-csi-node
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: retyc-csi-provisioner-role
+rules:
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "update"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list", "watch", "create", "update", "patch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["csinodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: retyc-csi-provisioner-binding
+subjects:
+  - kind: ServiceAccount
+    name: retyc-csi-controller
+    namespace: kube-system
+roleRef:
+  kind: ClusterRole
+  name: retyc-csi-provisioner-role
+  apiGroup: rbac.authorization.k8s.io

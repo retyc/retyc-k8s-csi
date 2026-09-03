@@ -1,0 +1,46 @@
+# retyc-k8s-csi (POC)
+
+A Kubernetes CSI driver that provisions RWX `PersistentVolume`s backed by [Retyc](https://retyc.com)
+datarooms. One PV = one dataroom, mounted node-side through `retyc-cli`'s built-in WebDAV server
+and `davfs2`.
+
+See [`~/.claude/plans/buzzing-juggling-fern.md`](/home/triplestack/.claude/plans/buzzing-juggling-fern.md)
+for the full design, the trade-offs accepted for this POC, and the staged verification plan.
+
+## Status
+
+This is a POC, not production-ready:
+
+- **Eventually consistent, not POSIX-strict RWX.** The WebDAV lock system is in-memory/per-process
+  and directory listings are cached ~30s — fine for sharing config/small artefacts between pods,
+  not for high-churn concurrent writes to the same file.
+- **No resize, no snapshots, no per-dataroom capacity enforcement.** Requested PVC sizes are
+  accepted and echoed back but not actually limited by the backend.
+- **Single shared Retyc identity for the whole cluster** — no per-tenant credentials.
+- **WebDAV `--auth` is deliberately off**: the supervised `retyc webdav serve` and the `davfs2`
+  mount both run inside the same node-plugin container/netns, so loopback-only really is the
+  trust boundary here.
+- Manual `mount.davfs` validation against the loopback webdav server was attempted on a dev
+  laptop and crashed (SIGABRT) inside its sandboxing — almost certainly an environment
+  restriction (fuse/mount capability), not a davfs2 defect, but **this needs to be re-validated
+  on a real Linux node/VM** before trusting the mount path end-to-end (see plan, verification
+  step 1).
+
+## Build
+
+```sh
+make build   # local binary, both --mode=controller and --mode=node
+make image   # container image (embeds the official retyc/retyc-cli image + davfs2)
+```
+
+## Deploy
+
+```sh
+cp deploy/secret.yaml.example deploy/secret.yaml
+# edit deploy/secret.yaml: RETYC_TOKEN (retyc auth login --offline) + RETYC_KEY_PASSPHRASE
+kubectl apply -f deploy/secret.yaml
+make deploy
+```
+
+Then create a `PersistentVolumeClaim` with `storageClassName: retyc-rwx` and
+`accessModes: [ReadWriteMany]`.
