@@ -56,10 +56,13 @@ func TestRun_FakeBinary(t *testing.T) {
 case "$2 $3" in
   "dataroom create") printf '{"id":"dr-1","title":"%s"}\n' "$5" ;;
   "dataroom ls")     printf '{"items":[{"id":"dr-1","title":"a"}],"total":30,"page":1,"pages":2}\n' ;;
-  "dataroom rm")     printf '\r\033[K{"error":"deleting dataroom: API error 404: {\\"detail\\":\\"Dataroom not found\\"}"}\n' >&2; exit 1 ;;
+  "dataroom rm")
+    printf '\r\033[K{"error":"deleting dataroom: API error 404: {\\"detail\\":\\"Dataroom not found\\"}"}\n' >&2
+    exit 1 ;;
   *) echo "unexpected: $*" >&2; exit 2 ;;
 esac
 `
+	//nolint:gosec // G306: the fixture is a script and must be executable
 	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}

@@ -34,10 +34,10 @@ func New(davfsOptions []string) *Mounter {
 // mount whose backing daemon is gone (davfs2 killed → "Transport endpoint is not connected"),
 // which stat() reports as an error rather than "not mounted".
 func (m *Mounter) mountState(target string) (mounted, corrupted bool, err error) {
-	notMnt, err := mountutils.IsNotMountPoint(m.iface, target)
+	isMnt, err := m.iface.IsMountPoint(target)
 	switch {
 	case err == nil:
-		return !notMnt, false, nil
+		return isMnt, false, nil
 	case os.IsNotExist(err):
 		return false, false, nil
 	case mountutils.IsCorruptedMnt(err):

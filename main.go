@@ -29,8 +29,10 @@ func main() {
 		endpoint   = flag.String("endpoint", "unix:///csi/csi.sock", "CSI gRPC endpoint")
 		retycBin   = flag.String("retyc-bin", "retyc", "path to the retyc CLI binary")
 		nodeID     = flag.String("node-id", "", "node ID reported by NodeGetInfo (node mode only, default: hostname)")
-		webdavAddr = flag.String("webdav-addr", "127.0.0.1", "bind address for the supervised 'retyc webdav serve' (node mode only)")
-		webdavPort = flag.Int("webdav-port", 8888, "port for the supervised 'retyc webdav serve' (node mode only)")
+		webdavAddr = flag.String("webdav-addr", "127.0.0.1",
+			"bind address for the supervised 'retyc webdav serve' (node mode only)")
+		webdavPort = flag.Int("webdav-port", 8888,
+			"port for the supervised 'retyc webdav serve' (node mode only)")
 	)
 	klog.InitFlags(nil)
 	flag.Parse()
