@@ -53,4 +53,10 @@ make deploy
 ```
 
 Then create a `PersistentVolumeClaim` with `storageClassName: retyc-rwx` and
-`accessModes: [ReadWriteMany]`.
+`accessModes: [ReadWriteMany]` — `deploy/examples/rwx-test.yaml` has one plus a writer and a
+reader pod.
+
+## Testing
+
+[`doc/testing.md`](doc/testing.md): staged plan from a manual WebDAV+davfs2 check up to a full
+single-node k3s cluster in QEMU, with what to measure at each step.
