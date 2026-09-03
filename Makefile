@@ -34,4 +34,4 @@ image:
 ## deploy/secret.yaml.example is intentionally excluded: copy it, fill in real
 ## credentials, and apply it yourself.
 deploy:
-	kubectl apply -f deploy/rbac.yaml -f deploy/csi-controller.yaml -f deploy/csi-node-daemonset.yaml -f deploy/storageclass.yaml
+	kubectl apply -f deploy/csidriver.yaml -f deploy/rbac.yaml -f deploy/csi-controller.yaml -f deploy/csi-node-daemonset.yaml -f deploy/storageclass.yaml

@@ -34,8 +34,9 @@ rules:
     resources: ["csinodes"]
     verbs: ["get", "list", "watch"]
   - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["get", "list"]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  # No secrets access: credentials reach the driver via envFrom, not CSI secret parameters.
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

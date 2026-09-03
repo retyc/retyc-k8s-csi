@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
@@ -47,6 +48,9 @@ func (s *NodeServer) NodeGetInfo(context.Context, *csi.NodeGetInfoRequest) (*csi
 	return &csi.NodeGetInfoResponse{NodeId: s.NodeID}, nil
 }
 
+// webdavReadyTimeout caps how long NodeStageVolume waits for the local webdav server.
+const webdavReadyTimeout = 30 * time.Second
+
 // dataroomURL builds the davfs2 mount source for a dataroom, keyed by title (see plan: WebDAV
 // exposes datarooms under /dataroom/<title>, not by ID).
 func (s *NodeServer) dataroomURL(title string) string {
@@ -66,7 +70,12 @@ func (s *NodeServer) NodeStageVolume(
 			"volume_context[\"title\"] is required (set by ControllerServer.CreateVolume)")
 	}
 
-	if err := s.Webdav.WaitReady(ctx); err != nil {
+	// Bound the wait ourselves: kubelet's CSI calls carry a deadline, but csi-sanity and manual
+	// grpc clients may not, and a webdav server that never comes up (bad RETYC_TOKEN) must
+	// surface as Unavailable, not hang the RPC forever.
+	readyCtx, cancel := context.WithTimeout(ctx, webdavReadyTimeout)
+	defer cancel()
+	if err := s.Webdav.WaitReady(readyCtx); err != nil {
 		return nil, status.Errorf(codes.Unavailable, "local webdav server not ready: %v", err)
 	}
 
@@ -103,8 +112,8 @@ func (s *NodeServer) NodePublishVolume(
 		return nil, status.Error(codes.InvalidArgument, "staging and target paths are required")
 	}
 
-	klog.Infof("NodePublishVolume: bind-mounting %s at %s", source, target)
-	if err := s.Mounter.BindMount(source, target); err != nil {
+	klog.Infof("NodePublishVolume: bind-mounting %s at %s (readonly=%t)", source, target, req.GetReadonly())
+	if err := s.Mounter.BindMount(source, target, req.GetReadonly()); err != nil {
 		return nil, status.Errorf(codes.Internal, "publishing volume: %v", err)
 	}
 

@@ -2,7 +2,6 @@ package driver
 
 import (
 	"context"
-	"strings"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
@@ -74,18 +73,25 @@ func (s *ControllerServer) CreateVolume(
 	}
 
 	// Idempotency (CSI requires CreateVolume to be safely retriable): if a dataroom titled `name`
-	// already exists, reuse it instead of creating a duplicate. Best-effort — there's no unique
-	// constraint on the backend, so a racing double-create is still possible; acceptable for a POC.
+	// already exists, reuse it instead of creating a duplicate. Best-effort on two counts: there's
+	// no unique constraint on the backend (a racing double-create is still possible), and `retyc
+	// dataroom ls` only returns page 1 (see retycclient.DataroomList.Complete) — past that, a
+	// retried CreateVolume for a dataroom on a later page would create a duplicate. Acceptable for
+	// a POC; logged loudly so it's visible when it starts to matter.
 	existing, err := s.Retyc.ListDatarooms(ctx)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "listing datarooms: %v", err)
 	}
-	for _, dr := range existing {
+	for _, dr := range existing.Items {
 		if dr.Title == name {
 			klog.Infof("CreateVolume: reusing existing dataroom %q for volume %q", dr.ID, name)
 
 			return createVolumeResponse(dr.ID, dr.Title, req), nil
 		}
+	}
+	if !existing.Complete {
+		klog.Warningf("CreateVolume: dataroom listing is paginated and only page 1 was checked; "+
+			"a retried create for %q may produce a duplicate dataroom", name)
 	}
 
 	quota, err := s.Retyc.Quota(ctx)
@@ -134,10 +140,8 @@ func (s *ControllerServer) DeleteVolume(
 	_, err := s.Retyc.DeleteDataroom(ctx, id)
 	if err != nil {
 		// DeleteVolume must be idempotent: a dataroom already gone (e.g. a retried call after a
-		// prior successful delete) is success, not an error. The CLI has no structured
-		// not-found error code (see plan: no --json error taxonomy yet), so this is a
-		// best-effort text match — a documented POC gap, not a guaranteed-correct check.
-		if strings.Contains(strings.ToLower(err.Error()), "not found") {
+		// prior successful delete) is success, not an error.
+		if retycclient.IsNotFound(err) {
 			klog.Infof("DeleteVolume: dataroom %q already gone, treating as success", id)
 
 			return &csi.DeleteVolumeResponse{}, nil

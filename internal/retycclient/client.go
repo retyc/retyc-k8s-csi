@@ -10,18 +10,20 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
+	"strings"
 	"time"
 )
 
-// Client execs a retyc binary with a fixed set of environment variables (RETYC_TOKEN,
-// RETYC_KEY_PASSPHRASE, ...) applied to every invocation.
+// Client execs a retyc binary with a fixed environment applied to every invocation.
 type Client struct {
 	// BinPath is the path to the retyc binary.
 	BinPath string
-	// Env holds extra environment variables (e.g. "RETYC_TOKEN=...",
-	// "RETYC_KEY_PASSPHRASE=...") appended to the subprocess environment.
+	// Env is the complete environment of the subprocess (it replaces, not appends to, the
+	// parent's environment — exec.Cmd semantics). It must carry RETYC_TOKEN and
+	// RETYC_KEY_PASSPHRASE; nil means "inherit the parent process environment".
 	Env []string
 	// Timeout bounds every invocation. Zero means no timeout.
 	Timeout time.Duration
@@ -32,21 +34,90 @@ func New(binPath string, env []string) *Client {
 	return &Client{BinPath: binPath, Env: env, Timeout: 60 * time.Second}
 }
 
-// cliError wraps the {"error": "..."} payload retyc prints on stderr when --json is set and the
-// command fails, or the raw stderr text when it isn't valid JSON (e.g. a crash before flag
-// parsing).
-type cliError struct {
-	Args   []string
-	Status string
-	Raw    string
+// Error is returned when the retyc CLI exits non-zero. Message is the {"error": "..."} payload
+// retyc prints on stderr with --json, or the raw stderr text when no such payload is found
+// (e.g. a crash before flag parsing).
+type Error struct {
+	Args    []string
+	Message string
 }
 
-func (e *cliError) Error() string {
-	if e.Status != "" {
-		return fmt.Sprintf("retyc %v: %s", e.Args, e.Status)
+func (e *Error) Error() string {
+	return fmt.Sprintf("retyc %s: %s", strings.Join(e.Args, " "), e.Message)
+}
+
+// IsNotFound reports whether err is a retyc CLI error for a missing resource. The CLI has no
+// structured error codes yet, so this matches the API error text the CLI relays
+// (`API error 404: {"detail":"Dataroom not found"}`) — a documented POC-grade check.
+func IsNotFound(err error) bool {
+	var e *Error
+	if !errors.As(err, &e) {
+		return false
+	}
+	msg := strings.ToLower(e.Message)
+
+	return strings.Contains(msg, "api error 404") || strings.Contains(msg, "not found")
+}
+
+// parseStderrError extracts the {"error": "..."} payload from stderr. The CLI's spinner writes
+// ANSI escape sequences to stderr even without a TTY (verified: `\r\x1b[K\x1b[36m⠋...` precedes
+// the JSON on the same line), so a plain Unmarshal of the whole buffer fails — locate the JSON
+// object instead of assuming stderr is clean.
+func parseStderrError(stderr []byte) string {
+	// Try every '{' from the first one on: the payload's own message may embed JSON (the API
+	// error body, e.g. {"detail":"Dataroom not found"}), so the *last* '{' is usually wrong,
+	// and the escape noise never contains '{' so the first candidate is normally right.
+	for idx := bytes.IndexByte(stderr, '{'); idx >= 0; {
+		var payload struct {
+			Error string `json:"error"`
+		}
+		if err := json.Unmarshal(bytes.TrimSpace(stderr[idx:]), &payload); err == nil && payload.Error != "" {
+			return payload.Error
+		}
+		next := bytes.IndexByte(stderr[idx+1:], '{')
+		if next < 0 {
+			break
+		}
+		idx += 1 + next
 	}
 
-	return fmt.Sprintf("retyc %v: %s", e.Args, e.Raw)
+	return strings.TrimSpace(stripANSI(string(stderr)))
+}
+
+// stripANSI removes CSI escape sequences (ESC '[' params… final-byte), other two-byte ESC
+// sequences, and carriage returns.
+func stripANSI(s string) string {
+	var b strings.Builder
+	const (
+		text = iota
+		afterEsc
+		inCSI
+	)
+	state := text
+	for _, r := range s {
+		switch state {
+		case afterEsc:
+			if r == '[' {
+				state = inCSI
+			} else {
+				state = text // two-byte escape (ESC x): drop x and resume
+			}
+		case inCSI:
+			if r >= 0x40 && r <= 0x7E { // final byte
+				state = text
+			}
+		default:
+			switch r {
+			case 0x1b:
+				state = afterEsc
+			case '\r':
+			default:
+				b.WriteRune(r)
+			}
+		}
+	}
+
+	return b.String()
 }
 
 // run execs `retyc --json <args...>` and decodes stdout into out (skipped when out is nil).
@@ -67,15 +138,12 @@ func (c *Client) run(ctx context.Context, out any, args ...string) error {
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		var errPayload struct {
-			Error string `json:"error"`
-		}
-		stderrText := stderr.String()
-		if jsonErr := json.Unmarshal(bytes.TrimSpace(stderr.Bytes()), &errPayload); jsonErr == nil && errPayload.Error != "" {
-			return &cliError{Args: args, Status: errPayload.Error}
+		msg := parseStderrError(stderr.Bytes())
+		if msg == "" {
+			msg = err.Error()
 		}
 
-		return &cliError{Args: args, Raw: stderrText}
+		return &Error{Args: args, Message: msg}
 	}
 
 	if out == nil {
@@ -83,7 +151,7 @@ func (c *Client) run(ctx context.Context, out any, args ...string) error {
 	}
 
 	if err := json.Unmarshal(stdout.Bytes(), out); err != nil {
-		return fmt.Errorf("decoding retyc %v output: %w", args, err)
+		return fmt.Errorf("decoding retyc %s output: %w", strings.Join(args, " "), err)
 	}
 
 	return nil
@@ -125,11 +193,21 @@ func (c *Client) DeleteDataroom(ctx context.Context, id string) (*DataroomDelete
 	return &result, nil
 }
 
-// Dataroom mirrors internal/api.Dataroom (only the fields exposed by `dataroom ls`).
+// Dataroom mirrors internal/api.Dataroom (only the fields this driver needs).
 type Dataroom struct {
 	ID        string    `json:"id"`
 	Title     string    `json:"title"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// DataroomList is the result of ListDatarooms.
+type DataroomList struct {
+	Items []Dataroom
+	// Complete is false when the account has more datarooms than the CLI returned: `retyc
+	// dataroom ls` only ever fetches page 1 (service.ListDatarooms → client.ListDatarooms(ctx, 1))
+	// and exposes no --page flag, so callers relying on Items for existence checks must treat an
+	// incomplete list as "unknown", not "absent".
+	Complete bool
 }
 
 // dataroomPage mirrors retyc's pagedJSON[api.Dataroom].
@@ -140,26 +218,27 @@ type dataroomPage struct {
 	Pages int        `json:"pages"`
 }
 
-// ListDatarooms returns every dataroom visible to the authenticated identity.
-func (c *Client) ListDatarooms(ctx context.Context) ([]Dataroom, error) {
+// ListDatarooms returns the datarooms visible to the authenticated identity (first page only —
+// see DataroomList.Complete).
+func (c *Client) ListDatarooms(ctx context.Context) (*DataroomList, error) {
 	var page dataroomPage
 	if err := c.run(ctx, &page, "dataroom", "ls"); err != nil {
 		return nil, err
 	}
 
-	return page.Items, nil
+	return &DataroomList{Items: page.Items, Complete: page.Pages <= 1}, nil
 }
 
 // UserQuota mirrors internal/api.UserQuota. Nil MaxCountDataroom/MaxCountShare means unlimited.
 // There is no per-dataroom size cap in the API — only these account-wide totals.
 type UserQuota struct {
-	CountShare       int    `json:"count_share"`
-	MaxCountShare    *int   `json:"max_count_share"`
-	CountDataroom    int    `json:"count_dataroom"`
-	MaxCountDataroom *int   `json:"max_count_dataroom"`
-	UsedStorage      int64  `json:"used_storage"`
-	MaxStorage       int64  `json:"max_storage"`
-	IsUploadReadOnly bool   `json:"is_upload_read_only"`
+	CountShare       int   `json:"count_share"`
+	MaxCountShare    *int  `json:"max_count_share"`
+	CountDataroom    int   `json:"count_dataroom"`
+	MaxCountDataroom *int  `json:"max_count_dataroom"`
+	UsedStorage      int64 `json:"used_storage"`
+	MaxStorage       int64 `json:"max_storage"`
+	IsUploadReadOnly bool  `json:"is_upload_read_only"`
 }
 
 // Quota returns the authenticated user's current quota usage/limits.
@@ -172,9 +251,7 @@ func (c *Client) Quota(ctx context.Context) (*UserQuota, error) {
 	return &q, nil
 }
 
-// HasDataroomQuota reports whether one more dataroom can be created, and IsUploadReadOnly reports
-// whether the account can no longer write at all — CreateVolume should surface both as
-// ResourceExhausted rather than a generic error.
+// HasDataroomQuota reports whether one more dataroom can be created.
 func (q *UserQuota) HasDataroomQuota() bool {
 	return q.MaxCountDataroom == nil || q.CountDataroom < *q.MaxCountDataroom
 }

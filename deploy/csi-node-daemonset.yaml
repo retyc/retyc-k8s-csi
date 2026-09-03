@@ -18,7 +18,6 @@ spec:
         app: retyc-csi-node
     spec:
       serviceAccountName: retyc-csi-node
-      hostPID: true
       containers:
         - name: node-driver-registrar
           image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.12.0

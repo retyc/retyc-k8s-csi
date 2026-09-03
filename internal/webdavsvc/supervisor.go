@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"net"
 	"os/exec"
+	"strings"
+	"syscall"
 	"time"
 
 	"k8s.io/klog/v2"
@@ -18,19 +20,22 @@ import (
 // Supervisor keeps `retyc webdav serve` running on Addr:Port, restarting it if it exits.
 type Supervisor struct {
 	BinPath string
-	Env     []string
-	Addr    string
-	Port    int
+	// Env is the child's complete environment (exec.Cmd semantics: replaces, not appends).
+	Env  []string
+	Addr string
+	Port int
 }
 
 // BaseURL returns the root URL of the supervised WebDAV server.
 func (s *Supervisor) BaseURL() string {
-	return fmt.Sprintf("http://%s", net.JoinHostPort(s.Addr, fmt.Sprint(s.Port)))
+	return "http://" + net.JoinHostPort(s.Addr, fmt.Sprint(s.Port))
 }
 
 // Run starts the supervised loop and blocks until ctx is cancelled. Call it in its own goroutine.
-// A crash is logged and retried with a fixed backoff; ctx cancellation stops the loop and the
-// child (via CommandContext).
+// A crash is logged and retried with a fixed backoff. On ctx cancellation the child gets SIGTERM
+// (retyc webdav serve drains in-flight uploads and cleans up orphaned nodes on SIGTERM; the
+// default exec.CommandContext behaviour is SIGKILL, which would skip that) and SIGKILL if it's
+// still alive after the retyc server's own 15s drain bound.
 func (s *Supervisor) Run(ctx context.Context) {
 	const restartBackoff = 5 * time.Second
 
@@ -48,6 +53,8 @@ func (s *Supervisor) Run(ctx context.Context) {
 		cmd.Env = s.Env
 		cmd.Stdout = klogWriter{}
 		cmd.Stderr = klogWriter{}
+		cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+		cmd.WaitDelay = 20 * time.Second
 
 		err := cmd.Run()
 		if ctx.Err() != nil {
@@ -84,11 +91,13 @@ func (s *Supervisor) WaitReady(ctx context.Context) error {
 	}
 }
 
-// klogWriter forwards a child process's stdout/stderr lines into klog, prefixed for provenance.
+// klogWriter forwards a child process's stdout/stderr into klog, prefixed for provenance.
 type klogWriter struct{}
 
 func (klogWriter) Write(p []byte) (int, error) {
-	klog.Infof("retyc webdav serve: %s", string(p))
+	if msg := strings.TrimRight(string(p), "\n"); msg != "" {
+		klog.Infof("retyc webdav serve: %s", msg)
+	}
 
 	return len(p), nil
 }

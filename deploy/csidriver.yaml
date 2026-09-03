@@ -1,0 +1,15 @@
+# Required. Without a CSIDriver object, kubelet assumes attachRequired=true and waits for a
+# VolumeAttachment that no external-attacher will ever create (none is deployed: this is a
+# NAS-like driver with no ControllerPublishVolume) — pods would hang in "waiting for attach".
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  name: csi.retyc.com
+spec:
+  attachRequired: false
+  podInfoOnMount: false
+  # A chown/chmod on a WebDAV-backed FUSE mount is meaningless; access for non-root pods comes
+  # from the davfs2 dir_mode/file_mode mount options instead (internal/mount).
+  fsGroupPolicy: None
+  volumeLifecycleModes:
+    - Persistent
