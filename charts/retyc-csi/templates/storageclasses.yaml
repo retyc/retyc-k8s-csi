@@ -1,0 +1,26 @@
+{{- range .Values.storageClasses }}
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ .name }}
+  labels:
+    {{- include "retyc-csi.labels" $ | nindent 4 }}
+  annotations:
+    {{- if .isDefault }}
+    storageclass.kubernetes.io/is-default-class: "true"
+    {{- end }}
+    {{- with .annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+provisioner: {{ include "retyc-csi.driverName" $ }}
+reclaimPolicy: {{ .reclaimPolicy | default "Delete" }}
+volumeBindingMode: {{ .volumeBindingMode | default "Immediate" }}
+{{- if .tenantSecretName }}
+parameters:
+  csi.storage.k8s.io/provisioner-secret-name: {{ .tenantSecretName | quote }}
+  csi.storage.k8s.io/provisioner-secret-namespace: ${pvc.namespace}
+  csi.storage.k8s.io/node-stage-secret-name: {{ .tenantSecretName | quote }}
+  csi.storage.k8s.io/node-stage-secret-namespace: ${pvc.namespace}
+{{- end }}
+{{- end }}

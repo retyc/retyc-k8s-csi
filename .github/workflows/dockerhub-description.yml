@@ -1,0 +1,24 @@
+name: Docker Hub Description
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - README.md
+      - .media/**
+      - .github/workflows/dockerhub-description.yml
+
+jobs:
+  update:
+    name: Update Docker Hub description
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Update Docker Hub description
+        uses: peter-evans/dockerhub-description@v5
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: retyc/retyc-k8s-csi

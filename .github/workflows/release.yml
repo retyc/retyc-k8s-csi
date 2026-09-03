@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  ci:
+    name: CI
+    uses: ./.github/workflows/_ci.yml
+
+  docker:
+    name: Docker
+    needs: ci
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    uses: ./.github/workflows/_docker.yml
+    with:
+      tags: |
+        ghcr.io/retyc/retyc-k8s-csi:${{ github.ref_name }}
+        ghcr.io/retyc/retyc-k8s-csi:latest
+        retyc/retyc-k8s-csi:${{ github.ref_name }}
+        retyc/retyc-k8s-csi:latest
+      version: ${{ github.ref_name }}
+    secrets: inherit
+
+  chart:
+    name: Helm chart
+    needs: docker
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v5
+        with:
+          version: v4.2.4
+
+      # Chart version = tag without the leading v (SemVer), appVersion = the tag, i.e. exactly
+      # the image tag pushed by the docker job — so `image.tag` can stay empty in values.
+      - name: Package
+        run: |
+          helm package charts/retyc-csi -d dist \
+            --version "${GITHUB_REF_NAME#v}" --app-version "${GITHUB_REF_NAME}"
+
+      - name: Log in to GitHub Container Registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Push to OCI registry
+        run: helm push dist/retyc-csi-*.tgz oci://ghcr.io/retyc/charts
+
+      - name: GitHub release
+        run: gh release create "${GITHUB_REF_NAME}" dist/retyc-csi-*.tgz --generate-notes --verify-tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

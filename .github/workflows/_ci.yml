@@ -1,0 +1,109 @@
+name: _CI
+
+on:
+  workflow_call:
+
+jobs:
+  go:
+    name: Build & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.13.2
+
+      - name: Test
+        run: go test -race -coverprofile=coverage.out ./...
+
+      - name: Coverage summary
+        run: go tool cover -func=coverage.out | tail -1
+
+      - name: govulncheck
+        uses: golang/govulncheck-action@v1
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: CGO_ENABLED=0 go build -trimpath ./...
+
+  helm:
+    name: Helm chart
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v5
+        with:
+          version: v4.2.4   # "latest" still resolves to the 3.x line
+
+      - name: Lint (values schema included)
+        run: helm lint charts/retyc-csi
+
+      - name: Render in every credential mode
+        run: |
+          helm template x charts/retyc-csi --set credentials.token=t --set credentials.keyPassphrase=p > /tmp/managed.yaml
+          helm template x charts/retyc-csi --set credentials.existingSecret=s > /tmp/existing.yaml
+          helm template x charts/retyc-csi > /tmp/tenant-only.yaml
+          ! grep -q envFrom /tmp/tenant-only.yaml
+
+      # Validate the rendered manifests against the Kubernetes API schemas, for the oldest and
+      # the newest version the chart claims to support (Chart.yaml kubeVersion).
+      - name: kubeconform
+        run: |
+          for v in 1.34.0 1.36.0; do
+            docker run --rm -i ghcr.io/yannh/kubeconform:v0.8.0 \
+              -strict -summary -kubernetes-version "$v" < /tmp/managed.yaml
+          done
+
+      - name: Package
+        run: helm package charts/retyc-csi -d dist
+
+  image:
+    name: Image (build only)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # The base retyc-cli image is public on ghcr.io; logging in anyway keeps the build working
+      # should the package ever go private, and lifts any anonymous rate limit.
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Builds the full image (driver + embedded retyc-cli + davfs2) without pushing, so a broken
+      # Dockerfile fails the PR rather than the release.
+      - name: Build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: false
+          build-args: |
+            VERSION=${{ github.sha }}
+            REVISION=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
