@@ -19,7 +19,7 @@ import (
 const DriverName = "csi.retyc.com"
 
 // DriverVersion is bumped on every behavior-affecting release; kubelet logs it on registration.
-const DriverVersion = "0.1.0"
+var DriverVersion = "dev" //nolint:gochecknoglobals // set at build time via -ldflags -X (see Makefile, Dockerfile)
 
 // IdentityServer implements csi.IdentityServer. Shared by both the controller and node plugin
 // processes (each runs its own gRPC server on its own unix socket).

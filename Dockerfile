@@ -1,14 +1,22 @@
 # RETYC_VERSION pins the retyc-cli image tag to embed (e.g. "v0.3.0"); defaults to latest.
 ARG RETYC_VERSION=latest
+# Build provenance, set by `make image` (git describe / rev-parse / date -u); also reported by the
+# driver's GetPluginInfo through ldflags.
+ARG VERSION=dev
+ARG REVISION=unknown
+ARG CREATED=1970-01-01T00:00:00Z
 
 FROM golang:1.26-trixie AS builder
+ARG VERSION
 
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 go build -o /retyc-k8s-csi .
+RUN CGO_ENABLED=0 go build -trimpath \
+    -ldflags "-s -w -X github.com/retyc/retyc-k8s-csi/internal/driver.DriverVersion=${VERSION}" \
+    -o /retyc-k8s-csi .
 
 # Reuse the officially published retyc-cli image instead of vendoring/rebuilding the binary —
 # dataroom creation and WebDAV serving are security-sensitive (AGE crypto) and should always run
@@ -16,6 +24,23 @@ RUN CGO_ENABLED=0 go build -o /retyc-k8s-csi .
 FROM retyc/retyc-cli:${RETYC_VERSION} AS retyc
 
 FROM debian:trixie-slim
+ARG RETYC_VERSION
+ARG VERSION
+ARG REVISION
+ARG CREATED
+
+LABEL org.opencontainers.image.title="Retyc CSI Driver" \
+      org.opencontainers.image.description="Kubernetes CSI driver for Retyc datarooms: ReadWriteMany volumes with end-to-end post-quantum encryption" \
+      org.opencontainers.image.vendor="Retyc / TripleStack SAS" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.url="https://retyc.com" \
+      org.opencontainers.image.source="https://github.com/retyc/retyc-k8s-csi" \
+      org.opencontainers.image.documentation="https://github.com/retyc/retyc-k8s-csi/blob/master/README.md" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${REVISION}" \
+      org.opencontainers.image.created="${CREATED}" \
+      org.opencontainers.image.base.name="docker.io/library/debian:trixie-slim" \
+      com.retyc.cli.version="${RETYC_VERSION}"
 
 # libnss-unknown: davfs2 enforces permissions itself (the kernel is told allow_other without
 # default_permissions) and, for any uid that is neither 0 nor the mount owner, its check starts
