@@ -59,4 +59,6 @@ reader pod.
 ## Testing
 
 [`doc/testing.md`](doc/testing.md): staged plan from a manual WebDAV+davfs2 check up to a full
-single-node k3s cluster in QEMU, with what to measure at each step.
+single-node k3s cluster, with what to measure at each step. The cluster is a Debian trixie VM
+built by the `Vagrantfile` (libvirt/KVM) and driven through `make vm-up`, `vm-load`, `vm-secret`,
+`vm-deploy`.
