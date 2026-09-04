@@ -8,6 +8,7 @@ import (
 	"google.golang.org/grpc/status"
 	"k8s.io/klog/v2"
 
+	"github.com/retyc/retyc-k8s-csi/internal/identity"
 	"github.com/retyc/retyc-k8s-csi/internal/retycclient"
 )
 
@@ -17,7 +18,28 @@ import (
 // without a title→ID lookup at NodeStageVolume time).
 type ControllerServer struct {
 	csi.UnimplementedControllerServer
+	// Retyc runs the CLI with the driver's own environment — the cluster-wide default identity,
+	// if any. Requests carrying CSI secrets (StorageClass secret parameters) get a per-call
+	// client with those credentials instead.
 	Retyc *retycclient.Client
+}
+
+// client picks the retyc client for a request: the tenant's credentials when the request carries
+// secrets, the default identity otherwise. Fails when neither exists.
+func (s *ControllerServer) client(secrets map[string]string) (*retycclient.Client, error) {
+	creds, err := identity.FromSecrets(secrets)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	if creds != nil {
+		return s.Retyc.WithEnv(creds.EnvOverrides()), nil
+	}
+	if identity.FromEnv(s.Retyc.Env) == nil {
+		return nil, status.Error(codes.FailedPrecondition,
+			"no credentials: the request carried no secrets and the driver has no default identity")
+	}
+
+	return s.Retyc, nil
 }
 
 func (s *ControllerServer) ControllerGetCapabilities(
@@ -78,7 +100,12 @@ func (s *ControllerServer) CreateVolume(
 	// dataroom ls` only returns page 1 (see retycclient.DataroomList.Complete) — past that, a
 	// retried CreateVolume for a dataroom on a later page would create a duplicate. Acceptable for
 	// accepted for now; logged loudly so it's visible when it starts to matter.
-	existing, err := s.Retyc.ListDatarooms(ctx)
+	retyc, err := s.client(req.GetSecrets())
+	if err != nil {
+		return nil, err
+	}
+
+	existing, err := retyc.ListDatarooms(ctx)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "listing datarooms: %v", err)
 	}
@@ -94,7 +121,7 @@ func (s *ControllerServer) CreateVolume(
 			"a retried create for %q may produce a duplicate dataroom", name)
 	}
 
-	quota, err := s.Retyc.Quota(ctx)
+	quota, err := retyc.Quota(ctx)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "checking quota: %v", err)
 	}
@@ -106,7 +133,7 @@ func (s *ControllerServer) CreateVolume(
 			quota.CountDataroom, *quota.MaxCountDataroom)
 	}
 
-	result, err := s.Retyc.CreateDataroom(ctx, name)
+	result, err := retyc.CreateDataroom(ctx, name)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "creating dataroom: %v", err)
 	}
@@ -137,7 +164,12 @@ func (s *ControllerServer) DeleteVolume(
 		return nil, status.Error(codes.InvalidArgument, "volume ID is required")
 	}
 
-	_, err := s.Retyc.DeleteDataroom(ctx, id)
+	retyc, err := s.client(req.GetSecrets())
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = retyc.DeleteDataroom(ctx, id)
 	if err != nil {
 		// DeleteVolume must be idempotent: a dataroom already gone (e.g. a retried call after a
 		// prior successful delete) is success, not an error.

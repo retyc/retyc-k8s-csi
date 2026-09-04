@@ -103,14 +103,22 @@ spec:
 Every pod mounting `shared-data` - on any node - reads and writes the same dataroom. The dataroom appears in
 `retyc dataroom ls` and in the web app under the name of the `PersistentVolume`.
 
-| StorageClass       | reclaimPolicy | Deleting the PVC                                                            |
-|--------------------|---------------|-----------------------------------------------------------------------------|
-| `retyc-rwx`        | `Delete`      | deletes the dataroom                                                        |
-| `retyc-rwx-retain` | `Retain`      | keeps the dataroom; the `PersistentVolume` stays `Released` until you delete it |
+| StorageClass       | Identity                                  | reclaimPolicy | Deleting the PVC                                          |
+|--------------------|-------------------------------------------|---------------|-----------------------------------------------------------|
+| `retyc-rwx`        | cluster-wide (driver Secret)              | `Delete`      | deletes the dataroom                                      |
+| `retyc-rwx-retain` | cluster-wide (driver Secret)              | `Retain`      | keeps the dataroom; the PV stays `Released` until deleted |
+| `retyc-rwx-tenant` | the namespace's own `retyc-credentials`   | `Retain`      | keeps the dataroom, in the namespace's account            |
 
 An existing dataroom - retained or created by hand - can be adopted as a static volume: see
 [deploy/examples/static-pv.yaml](deploy/examples/static-pv.yaml). A complete writer/reader example lives in
 [deploy/examples/rwx-test.yaml](deploy/examples/rwx-test.yaml).
+
+### Multi-tenant
+
+With `retyc-rwx-tenant`, each namespace brings its own Retyc account: a Secret named `retyc-credentials` in the
+namespace, holding `RETYC_TOKEN` and `RETYC_KEY_PASSPHRASE`. Datarooms are created in that account and mounted with
+it, by a dedicated WebDAV server on each node. The driver's own Secret is optional in that setup. Example:
+[deploy/examples/tenant.yaml.example](deploy/examples/tenant.yaml.example).
 
 ---
 
@@ -118,8 +126,9 @@ An existing dataroom - retained or created by hand - can be adopted as a static 
 
 - **Encryption**: files and metadata are encrypted on the node with [AGE](https://github.com/FiloSottile/age)
   post-quantum hybrid keys by `retyc-cli`, before anything leaves the node. Retyc servers only ever see ciphertext.
-- **Identity**: one Retyc account per cluster, injected into the driver pods from a `Secret`. The offline token and the
-  key passphrase never appear on a command line or in a manifest other than that `Secret`.
+- **Identity**: a Retyc account per cluster (the driver's `Secret`) or per namespace (`retyc-rwx-tenant`, resolved by
+  kubelet and the provisioner from the claim's namespace). Tokens and passphrases only ever live in those Secrets and in
+  the environment of the `retyc` processes; each identity's WebDAV server runs with its own state directory.
 - **Trust boundary**: the WebDAV server listens on loopback inside the node plugin's own network namespace, and only the
   `davfs2` mount in that same container talks to it. It is unreachable from pods and from the node.
 - **Pod access**: mounts are world-writable (`dir_mode=0777,file_mode=0666`) so that non-root pods can write - Kubernetes
@@ -164,7 +173,6 @@ credential shows up as a `1/2` NotReady pod, never as a restart loop. See
 - **A node plugin restart breaks the mounts on that node.** The FUSE daemons live in the plugin container. Pods see
   `Transport endpoint is not connected` until they are rescheduled; the driver cleans the stale mounts up on the next
   stage/unstage. Plan node plugin upgrades like a node drain.
-- **One Retyc identity per cluster.** No per-namespace or per-tenant credentials yet.
 - **File modes are set at creation.** `dir_mode`/`file_mode` apply to entries discovered on the server; a file created
   through the mount keeps the mode derived from the creating pod's umask until the plugin's metadata cache is rebuilt.
 - **`CreateVolume` idempotency checks the first page of `retyc dataroom ls` only.** A retried create past that page can

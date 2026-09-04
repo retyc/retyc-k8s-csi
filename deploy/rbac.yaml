@@ -36,7 +36,11 @@ rules:
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get", "list", "watch"]
-  # No secrets access: credentials reach the driver via envFrom, not CSI secret parameters.
+  # StorageClasses with csi.storage.k8s.io/provisioner-secret-* parameters (retyc-rwx-tenant)
+  # make the provisioner read the tenant's Secret and pass it to CreateVolume/DeleteVolume.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

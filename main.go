@@ -19,6 +19,7 @@ import (
 
 	"github.com/retyc/retyc-k8s-csi/internal/driver"
 	"github.com/retyc/retyc-k8s-csi/internal/health"
+	"github.com/retyc/retyc-k8s-csi/internal/identity"
 	"github.com/retyc/retyc-k8s-csi/internal/mount"
 	"github.com/retyc/retyc-k8s-csi/internal/retycclient"
 	"github.com/retyc/retyc-k8s-csi/internal/webdavsvc"
@@ -33,36 +34,55 @@ func main() {
 		webdavAddr = flag.String("webdav-addr", "127.0.0.1",
 			"bind address for the supervised 'retyc webdav serve' (node mode only)")
 		webdavPort = flag.Int("webdav-port", 8888,
-			"port for the supervised 'retyc webdav serve' (node mode only)")
+			"first port for the supervised 'retyc webdav serve' servers, one per identity (node mode only)")
+		stateDir = flag.String("state-dir", "/var/lib/retyc-csi",
+			"directory for per-identity retyc state (node mode only)")
 		httpEndpoint = flag.String("http-endpoint", ":9808",
 			"address for the /healthz (liveness) and /readyz (readiness) HTTP endpoints; empty disables them")
 	)
 	klog.InitFlags(nil)
 	flag.Parse()
 
-	if err := run(*mode, *endpoint, *retycBin, *nodeID, *webdavAddr, *webdavPort, *httpEndpoint); err != nil {
+	opts := options{
+		mode: *mode, endpoint: *endpoint, retycBin: *retycBin, nodeID: *nodeID,
+		webdavAddr: *webdavAddr, webdavPort: *webdavPort, stateDir: *stateDir, httpEndpoint: *httpEndpoint,
+	}
+	if err := run(opts); err != nil {
 		klog.Fatal(err)
 	}
+}
+
+type options struct {
+	mode, endpoint, retycBin, nodeID, webdavAddr, stateDir, httpEndpoint string
+	webdavPort                                                           int
 }
 
 // authStatusCacheTTL bounds how often the controller's readiness re-runs `retyc auth status`
 // (one auth-server round-trip) — kubelet probes every few seconds, the token doesn't change.
 const authStatusCacheTTL = 2 * time.Minute
 
-func run(mode, endpoint, retycBin, nodeID, webdavAddr string, webdavPort int, httpEndpoint string) error {
+func run(o options) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	server := grpc.NewServer()
 	var ready health.Checker
+	// The pod's Secret (envFrom) provides the cluster-wide default identity, if any; tenants'
+	// identities arrive per request through CSI secrets.
+	env := os.Environ()
+	defaultIdentity := identity.FromEnv(env)
 
-	switch mode {
+	switch o.mode {
 	case "controller":
-		env := os.Environ() // carries RETYC_TOKEN / RETYC_KEY_PASSPHRASE from the pod's Secret
-		retyc := retycclient.New(retycBin, env)
-		ready = health.Cached(retyc.AuthStatusCheck, authStatusCacheTTL)
+		retyc := retycclient.New(o.retycBin, env)
+		if defaultIdentity != nil {
+			ready = health.Cached(retyc.AuthStatusCheck, authStatusCacheTTL)
+		} else {
+			klog.Info("no default identity in the environment: only StorageClasses with secret parameters will work")
+		}
 		csi.RegisterControllerServer(server, &driver.ControllerServer{Retyc: retyc})
 	case "node":
+		nodeID := o.nodeID
 		if nodeID == "" {
 			nodeID = os.Getenv("NODE_ID") // set via the downward API (spec.nodeName) in the DaemonSet
 		}
@@ -74,34 +94,35 @@ func run(mode, endpoint, retycBin, nodeID, webdavAddr string, webdavPort int, ht
 			nodeID = hostname
 		}
 
-		webdav := &webdavsvc.Supervisor{
-			BinPath: retycBin,
-			Env:     os.Environ(),
-			Addr:    webdavAddr,
-			Port:    webdavPort,
+		pool := webdavsvc.NewPool(ctx, o.retycBin, env, o.webdavAddr, o.webdavPort, o.stateDir)
+		if defaultIdentity != nil {
+			if _, err := pool.Pin(defaultIdentity); err != nil {
+				return fmt.Errorf("starting the default webdav server: %w", err)
+			}
+		} else {
+			klog.Info("no default identity in the environment: only StorageClasses with secret parameters will work")
 		}
-		go webdav.Run(ctx)
-		ready = webdav.Healthy
+		ready = pool.Healthy
 
 		csi.RegisterNodeServer(server, &driver.NodeServer{
 			NodeID:  nodeID,
 			Mounter: mount.New(mount.DefaultDavfsOptions),
-			Webdav:  webdav,
+			Webdav:  pool,
 		})
 	default:
-		return fmt.Errorf("--mode must be \"controller\" or \"node\", got %q", mode)
+		return fmt.Errorf("--mode must be \"controller\" or \"node\", got %q", o.mode)
 	}
 	csi.RegisterIdentityServer(server, &driver.IdentityServer{Ready: ready})
 
-	if httpEndpoint != "" {
+	if o.httpEndpoint != "" {
 		go func() {
-			if err := health.ListenAndServe(ctx, httpEndpoint, health.Handler(ready)); err != nil {
+			if err := health.ListenAndServe(ctx, o.httpEndpoint, health.Handler(ready)); err != nil {
 				klog.Errorf("health endpoints: %v", err)
 			}
 		}()
 	}
 
-	listener, err := listen(endpoint)
+	listener, err := listen(o.endpoint)
 	if err != nil {
 		return err
 	}
@@ -112,7 +133,7 @@ func run(mode, endpoint, retycBin, nodeID, webdavAddr string, webdavPort int, ht
 		server.GracefulStop()
 	}()
 
-	klog.Infof("%s plugin listening on %s", mode, endpoint)
+	klog.Infof("%s plugin listening on %s", o.mode, o.endpoint)
 
 	return server.Serve(listener)
 }

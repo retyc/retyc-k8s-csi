@@ -76,7 +76,7 @@ func TestSupervisor_HealthyProbesTheServer(t *testing.T) {
 
 	// A child that stays alive stands in for a serving `retyc webdav serve`; the HTTP side is
 	// the httptest server above.
-	s := &Supervisor{BinPath: fakeBinary(t, "sleep 30"), Addr: host, Port: port}
+	s := &Supervisor{BinPath: fakeBinary(t, "exec sleep 30"), Addr: host, Port: port}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go s.Run(ctx)

@@ -55,10 +55,11 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 2
-          # The steady state is ~40 MiB, but resolving a dataroom session runs an age scrypt
-          # (2^18 work factor: ~256 MiB of working memory, once per dataroom per process) inside
-          # `retyc webdav serve`. A limit below ~350 MiB OOM-kills the plugin on the first mount
-          # — and with it every mount on the node.
+          # The steady state is ~40 MiB per identity served on the node (one `retyc webdav serve`
+          # each), but resolving a dataroom session runs an age scrypt (2^18 work factor:
+          # ~256 MiB of working memory, once per dataroom per server) inside that process. A
+          # limit below ~350 MiB OOM-kills the plugin on the first mount — and with it every
+          # mount on the node. Raise it with the number of tenant identities per node.
           resources:
             requests: {cpu: 10m, memory: 64Mi}
             limits: {memory: 512Mi}

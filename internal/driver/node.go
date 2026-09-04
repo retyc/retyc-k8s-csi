@@ -11,19 +11,20 @@ import (
 	"google.golang.org/grpc/status"
 	"k8s.io/klog/v2"
 
+	"github.com/retyc/retyc-k8s-csi/internal/identity"
 	"github.com/retyc/retyc-k8s-csi/internal/mount"
 	"github.com/retyc/retyc-k8s-csi/internal/webdavsvc"
 )
 
 // NodeServer implements csi.NodeServer. NodeStageVolume mounts a dataroom via davfs2 against the
-// node-local `retyc webdav serve` process (supervised by Webdav); NodePublishVolume bind-mounts
-// that staging path into each pod's target path — the standard CSI pattern that lets several
-// pods on the same node share one davfs2 mount.
+// node-local `retyc webdav serve` of the volume's identity (one supervised server per identity,
+// see webdavsvc.Pool); NodePublishVolume bind-mounts that staging path into each pod's target
+// path — the standard CSI pattern that lets several pods on the same node share one davfs2 mount.
 type NodeServer struct {
 	csi.UnimplementedNodeServer
 	NodeID  string
 	Mounter *mount.Mounter
-	Webdav  *webdavsvc.Supervisor
+	Webdav  *webdavsvc.Pool
 }
 
 func (s *NodeServer) NodeGetCapabilities(
@@ -51,10 +52,10 @@ func (s *NodeServer) NodeGetInfo(context.Context, *csi.NodeGetInfoRequest) (*csi
 // webdavReadyTimeout caps how long NodeStageVolume waits for the local webdav server.
 const webdavReadyTimeout = 30 * time.Second
 
-// dataroomURL builds the davfs2 mount source for a dataroom, keyed by title (see plan: WebDAV
-// exposes datarooms under /dataroom/<title>, not by ID).
-func (s *NodeServer) dataroomURL(title string) string {
-	return fmt.Sprintf("%s/dataroom/%s", s.Webdav.BaseURL(), url.PathEscape(title))
+// dataroomURL builds the davfs2 mount source for a dataroom on a given server, keyed by title
+// (the WebDAV server exposes datarooms under /dataroom/<title>, not by ID).
+func dataroomURL(server *webdavsvc.Supervisor, title string) string {
+	return fmt.Sprintf("%s/dataroom/%s", server.BaseURL(), url.PathEscape(title))
 }
 
 func (s *NodeServer) NodeStageVolume(
@@ -70,18 +71,32 @@ func (s *NodeServer) NodeStageVolume(
 			"volume_context[\"title\"] is required (set by ControllerServer.CreateVolume)")
 	}
 
+	creds, err := identity.FromSecrets(req.GetSecrets())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	server, err := s.Webdav.Acquire(stagingPath, creds)
+	if err != nil {
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
+	}
+
 	// Bound the wait ourselves: kubelet's CSI calls carry a deadline, but csi-sanity and manual
 	// grpc clients may not, and a webdav server that never comes up (bad RETYC_TOKEN) must
-	// surface as Unavailable, not hang the RPC forever.
+	// surface as Unavailable, not hang the RPC forever. On failure the server reference is
+	// dropped again so a crash-looping tenant server does not outlive kubelet's retries.
 	readyCtx, cancel := context.WithTimeout(ctx, webdavReadyTimeout)
 	defer cancel()
-	if err := s.Webdav.WaitReady(readyCtx); err != nil {
+	if err := server.WaitReady(readyCtx); err != nil {
+		s.Webdav.Release(stagingPath)
+
 		return nil, status.Errorf(codes.Unavailable, "local webdav server not ready: %v", err)
 	}
 
-	dataroomURL := s.dataroomURL(title)
-	klog.Infof("NodeStageVolume: mounting %s at %s", dataroomURL, stagingPath)
-	if err := s.Mounter.MountDavfs(dataroomURL, stagingPath); err != nil {
+	source := dataroomURL(server, title)
+	klog.Infof("NodeStageVolume: mounting %s at %s", source, stagingPath)
+	if err := s.Mounter.MountDavfs(source, stagingPath); err != nil {
+		s.Webdav.Release(stagingPath)
+
 		return nil, status.Errorf(codes.Internal, "mounting dataroom: %v", err)
 	}
 
@@ -99,6 +114,7 @@ func (s *NodeServer) NodeUnstageVolume(
 	if err := s.Mounter.UnmountDavfs(stagingPath); err != nil {
 		return nil, status.Errorf(codes.Internal, "unmounting %s: %v", stagingPath, err)
 	}
+	s.Webdav.Release(stagingPath)
 
 	return &csi.NodeUnstageVolumeResponse{}, nil
 }

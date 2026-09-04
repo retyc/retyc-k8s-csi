@@ -8,7 +8,7 @@ skip straight to the cluster.
 | 1. Manual WebDAV + davfs2 | The storage path works at all, and how consistent it is | in the VM, as root |
 | 2. Unit tests + real CLI | The `retyc` exec wrapper decodes what the real CLI prints | on the host |
 | 3. csi-sanity (optional) | gRPC conformance of the Controller/Node services | in the VM, as root |
-| 4. Single-node k3s | The whole thing, including kubelet mount propagation and FUSE | in the VM, driven from the host |
+| 4. Single-node k3s | The whole thing: mount propagation, FUSE, Retain, per-tenant identities | in the VM, driven from the host |
 
 "The VM" is one Debian 13 (trixie) machine running k3s, built by the `Vagrantfile` at the repo
 root on top of libvirt/KVM and driven through `make vm-*`. Stages 1 and 3 need a kernel you
@@ -283,7 +283,30 @@ kubectl delete pod adopted; kubectl delete pvc retyc-adopted; kubectl delete pv 
 retyc --json dataroom rm retyc://$id -y               # (host) manual cleanup is the point of Retain
 ```
 
-### 4.5 Teardown — and verify the dataroom is gone
+### 4.5 Per-tenant identity
+
+A namespace with its own Secret must get its own WebDAV server and its own dataroom. Servers are keyed by the
+credentials, so a Secret identical to the driver's shares the default server; use a second account, or the same token
+with a wrong passphrase to see a separate (crash-looping) server on `:8889` while the other tenants keep working. In
+the VM:
+
+```sh
+# Namespace, PVC and pod from the example, then a real Secret copied from the driver's:
+awk 'BEGIN{RS="---\n"; ORS="---\n"} NR!=2' /vagrant/deploy/examples/tenant.yaml.example | kubectl apply -f -
+kubectl get secret -n kube-system retyc-csi-credentials -o json \
+  | jq '{apiVersion, kind, type, metadata:{name:"retyc-credentials", namespace:"team-a"}, data}' | kubectl apply -f -
+kubectl -n team-a wait --for=condition=Ready pod/team-writer --timeout=180s
+
+kubectl get pv                                                    # one PV in retyc-rwx-tenant, Retain
+kubectl -n kube-system logs ds/retyc-csi-node -c retyc-csi-node | grep 'starting server'   # a second identity on :8889
+mount | grep -o 'http://127.0.0.1:[0-9]*/dataroom/[^ ]*'         # the tenant volume is mounted through that port
+kubectl -n kube-system exec ds/retyc-csi-node -c retyc-csi-node -- ls /var/lib/retyc-csi   # one state dir per identity
+
+kubectl delete ns team-a                                          # PV Released, dataroom kept (Retain)
+kubectl -n kube-system logs ds/retyc-csi-node -c retyc-csi-node | grep 'stopping server'   # tenant server gone
+```
+
+### 4.6 Teardown — and verify the dataroom is gone
 
 ```sh
 vagrant ssh -c "kubectl delete -f /vagrant/deploy/examples/rwx-test.yaml"

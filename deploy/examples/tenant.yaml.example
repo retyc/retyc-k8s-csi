@@ -1,0 +1,47 @@
+# A namespace bringing its own Retyc account. Copy, fill in the Secret, apply: the claim is
+# provisioned in *that* account, and mounted with it, through the retyc-rwx-tenant class. The
+# Secret's name is fixed by the StorageClass parameters (deploy/storageclass.yaml).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-a
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: retyc-credentials
+  namespace: team-a
+type: Opaque
+stringData:
+  RETYC_TOKEN: "replace-with-offline-token"          # retyc auth login --offline, on the team's account
+  RETYC_KEY_PASSPHRASE: "replace-with-key-passphrase"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: team-data
+  namespace: team-a
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: retyc-rwx-tenant
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: team-writer
+  namespace: team-a
+spec:
+  containers:
+    - name: writer
+      image: busybox:1.36
+      command: ["sh", "-c", "while true; do date >> /data/log.txt; sleep 5; done"]
+      volumeMounts:
+        - name: data
+          mountPath: /data
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: team-data

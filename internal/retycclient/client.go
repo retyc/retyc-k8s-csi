@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/retyc/retyc-k8s-csi/internal/identity"
 	"os/exec"
 	"strings"
 	"time"
@@ -255,6 +256,15 @@ func (c *Client) Quota(ctx context.Context) (*UserQuota, error) {
 // HasDataroomQuota reports whether one more dataroom can be created.
 func (q *UserQuota) HasDataroomQuota() bool {
 	return q.MaxCountDataroom == nil || q.CountDataroom < *q.MaxCountDataroom
+}
+
+// WithEnv returns a copy of c whose subprocesses see overrides applied on top of c's environment
+// (per-tenant credentials from CSI secrets). c itself is unchanged.
+func (c *Client) WithEnv(overrides map[string]string) *Client {
+	clone := *c
+	clone.Env = identity.MergeEnv(c.Env, overrides)
+
+	return &clone
 }
 
 // AuthStatus mirrors retyc's authStatusJSON (cmd/output.go).

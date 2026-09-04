@@ -89,6 +89,13 @@ esac
 	if err == nil || !strings.Contains(err.Error(), "no_token") {
 		t.Fatalf("AuthStatusCheck unauthenticated must fail with the reason, got %v", err)
 	}
+	bad := New(fake, []string{"RETYC_TOKEN=bad"})
+	if err := bad.WithEnv(map[string]string{"RETYC_TOKEN": "good"}).AuthStatusCheck(ctx); err != nil {
+		t.Fatalf("WithEnv must override the inherited token: %v", err)
+	}
+	if err := bad.AuthStatusCheck(ctx); err == nil {
+		t.Fatal("WithEnv must not modify the original client")
+	}
 
 	_, err = c.DeleteDataroom(ctx, "dr-404")
 	if !IsNotFound(err) {

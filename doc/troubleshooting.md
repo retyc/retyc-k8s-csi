@@ -29,10 +29,27 @@ Fix the Secret, then `kubectl -n kube-system rollout restart ds/retyc-csi-node`.
 `retyc auth status` does not report an authenticated account: token problem, same fix as above with
 `rollout restart deploy/retyc-csi-controller`. Until then the previous controller pod, if any, keeps serving.
 
+## Tenant claim stays `Pending`
+
+With `retyc-rwx-tenant`, the provisioner event names the problem: `secret "retyc-credentials" not found` in the claim's
+namespace, or a `CreateVolume` error from the CLI if the Secret's values are wrong. The Secret's name is fixed by the
+StorageClass parameters. The driver's own credentials are never used for that class.
+
+## Node pod is `1/2`, `/readyz` lists `identity <key>: retyc webdav serve is not running`
+
+Same diagnosis as above, for one identity: the key is the hash of a tenant's credentials, the last output line says
+what the CLI rejected. Find the namespace by checking which claims of `retyc-rwx-tenant` are stuck on that node; the
+other identities' servers keep serving.
+
 ## Pod stuck in `ContainerCreating`, `MountVolume.MountDevice failed ... Unavailable: local webdav server not ready`
 
 `NodeStageVolume` waited 30 s for the local WebDAV server. Look at the node pod's readiness (above). Once the server is
 back, kubelet's next retry succeeds without touching the pod.
+
+## `MountVolume.MountDevice failed ... mount.davfs: Mounting failed. 404 Not Found` right after provisioning
+
+The WebDAV server caches the list of dataroom titles for 60 s (`retyc-cli`), and a dataroom created after its last
+listing is unknown to it until the cache expires. kubelet's retries succeed within about a minute; nothing to do.
 
 ## `Transport endpoint is not connected` inside a pod
 
