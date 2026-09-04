@@ -21,7 +21,12 @@ This is a POC, not production-ready:
   mount both run inside the same node-plugin container/netns, so loopback-only really is the
   trust boundary here.
 - **Mounts are world-writable inside the pod** (`dir_mode=0777,file_mode=0666`): `fsGroup`
-  can't be applied to a WebDAV/FUSE mount, so this is how non-root pods get write access.
+  can't be applied to a WebDAV/FUSE mount, so this is how non-root pods get write access. Two
+  caveats: those modes only apply to entries davfs2 discovers on the server; a file *created*
+  through the mount keeps the mode the kernel derived from the creating pod's umask (typically
+  0644 for root), until the plugin restarts and the metadata cache is rebuilt. And davfs2 does
+  its own permission checks, which start with `getpwuid()` of the calling uid *inside the plugin
+  container* — the image ships `libnss-unknown` so that arbitrary `runAsUser` values resolve.
 - **A node-plugin pod restart kills every davfs2 mount on that node.** The FUSE daemons live in
   the plugin container; pods then see "Transport endpoint is not connected" until they are
   rescheduled/remounted (the driver does clean up the corrupted mounts on the next
@@ -30,11 +35,9 @@ This is a POC, not production-ready:
 - **`CreateVolume` idempotency only sees the first page of `retyc dataroom ls`** (the CLI has no
   `--page` flag); a retried create past that page can produce a duplicate dataroom. Logged as a
   warning when it becomes possible.
-- Manual `mount.davfs` validation against the loopback webdav server was attempted on a dev
-  laptop and crashed (SIGABRT) inside its sandboxing — almost certainly an environment
-  restriction (fuse/mount capability), not a davfs2 defect, but **this needs to be re-validated
-  on a real Linux node/VM** before trusting the mount path end-to-end (see plan, verification
-  step 1).
+- Validated end-to-end on a single-node k3s (Debian trixie VM, see [`doc/testing.md`](doc/testing.md)):
+  PVC bound, davfs2 mount propagated to the host, root and uid-1000 pods sharing one volume.
+  Multi-node behaviour is untested.
 
 ## Build
 

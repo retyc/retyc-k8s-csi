@@ -17,9 +17,21 @@ FROM retyc/retyc-cli:${RETYC_VERSION} AS retyc
 
 FROM debian:trixie-slim
 
+# libnss-unknown: davfs2 enforces permissions itself (the kernel is told allow_other without
+# default_permissions) and, for any uid that is neither 0 nor the mount owner, its check starts
+# with getpwuid(uid) and denies everything when that fails (cache.c, has_permission). The daemon
+# runs in *this* container, so a pod's runAsUser would never resolve here without an NSS module
+# that synthesises an entry for unknown uids. The package rewrites nsswitch.conf on install —
+# and once it is active, davfs2's postinst sees `getent passwd davfs2` succeed for the
+# not-yet-created account and skips creating it ("group davfs2 does not exist" at mount time),
+# hence the two separate installs, davfs2 first.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends davfs2 ca-certificates && \
-    rm -rf /var/lib/apt/lists/*
+    apt-get install -y --no-install-recommends libnss-unknown && \
+    rm -rf /var/lib/apt/lists/* && \
+    # mount.davfs refuses to run without /etc/mtab ("can't access file /etc/mtab"). `docker run`
+    # creates this symlink at container start, containerd (k3s, CRI) does not — so ship it.
+    ln -sf /proc/mounts /etc/mtab
 
 # davfs2 tuning for a non-interactive, multi-pod mount. Shipped defaults would break or hurt:
 #   ask_auth 1      → mount.davfs prompts for a username on stdin (no TTY → mount fails).

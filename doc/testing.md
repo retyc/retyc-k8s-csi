@@ -222,10 +222,12 @@ retyc --json dataroom ls | grep -B1 -A3 '"pvc-'     # title == PV name
 Then inspect the node side in the VM:
 
 ```sh
-mount | grep davfs                            # one davfs2 mount per PV under /var/lib/kubelet/plugins/.../globalmount
-mount | grep /var/lib/kubelet/pods             # one bind mount per pod
-kubectl exec retyc-reader -- id
-kubectl exec retyc-reader -- sh -c 'echo from-uid-1000 >> /data/log.txt'   # non-root write works
+mount | grep dataroom                          # type is `fuse`, source is the WebDAV URL: one per PV under
+                                              # /var/lib/kubelet/plugins/.../globalmount + one bind mount per pod
+kubectl exec retyc-reader -- id                # uid=1000
+kubectl exec retyc-reader -- sh -c 'echo hi > /data/from-uid-1000.txt && cat /data/from-uid-1000.txt'   # non-root create+read
+kubectl exec retyc-writer -- ls -ln /data      # root's log.txt is 0644: the kernel applied the writer's umask
+                                              # to the create, and davfs2 remembers that mode (see README)
 ```
 
 ### 4.3 Failure modes worth exercising
