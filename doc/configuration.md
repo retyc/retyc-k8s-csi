@@ -1,5 +1,8 @@
 # Configuration
 
+Everything below is exposed by the Helm chart (`charts/retyc-csi`, values in its
+[README](../charts/retyc-csi/README.md)) and set by hand in the raw manifests under `deploy/`.
+
 ## Driver flags
 
 | Flag | Default | Description |

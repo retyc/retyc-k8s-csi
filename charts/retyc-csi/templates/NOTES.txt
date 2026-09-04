@@ -1,0 +1,21 @@
+{{ .Chart.Name }} {{ .Chart.Version }} (driver {{ .Values.image.tag | default .Chart.AppVersion }}) is installed as release {{ .Release.Name }} in {{ .Release.Namespace }}.
+
+  kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }}
+
+Both pods must be 2/2 Running. A driver container that is not ready explains why on /readyz and in its logs.
+
+{{- $secret := include "retyc-csi.credentialsSecretName" . }}
+{{- if $secret }}
+
+Cluster-wide identity: Secret "{{ $secret }}".
+{{- else }}
+
+No cluster-wide identity configured: only StorageClasses with a tenantSecretName will provision volumes.
+{{- end }}
+
+StorageClasses:
+{{- range .Values.storageClasses }}
+  - {{ .name }}: reclaimPolicy {{ .reclaimPolicy | default "Delete" }}{{ if .tenantSecretName }}, identity from Secret "{{ .tenantSecretName }}" in the claim's namespace{{ else }}, cluster-wide identity{{ end }}
+{{- end }}
+
+A ReadWriteMany claim on one of them is a Retyc dataroom shared by every pod that mounts it.

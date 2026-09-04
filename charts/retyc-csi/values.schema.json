@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "retyc-csi values",
+  "type": "object",
+  "properties": {
+    "image": {
+      "type": "object",
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string" },
+        "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+      },
+      "required": ["repository"]
+    },
+    "imagePullSecrets": { "type": "array", "items": { "type": "object" } },
+    "nameOverride": { "type": "string" },
+    "fullnameOverride": { "type": "string" },
+    "credentials": {
+      "type": "object",
+      "properties": {
+        "create": { "type": "boolean" },
+        "existingSecret": { "type": "string" },
+        "token": { "type": "string" },
+        "keyPassphrase": { "type": "string" }
+      }
+    },
+    "storageClasses": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" },
+          "reclaimPolicy": { "type": "string", "enum": ["Delete", "Retain"] },
+          "volumeBindingMode": { "type": "string", "enum": ["Immediate", "WaitForFirstConsumer"] },
+          "isDefault": { "type": "boolean" },
+          "annotations": { "type": "object" },
+          "tenantSecretName": { "type": "string" }
+        },
+        "required": ["name"]
+      }
+    },
+    "rbac": { "type": "object", "properties": { "create": { "type": "boolean" } } },
+    "serviceAccount": {
+      "type": "object",
+      "properties": {
+        "controller": { "$ref": "#/$defs/serviceAccount" },
+        "node": { "$ref": "#/$defs/serviceAccount" }
+      }
+    },
+    "healthPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+    "logLevel": { "type": "integer", "minimum": 0, "maximum": 10 },
+    "probes": {
+      "type": "object",
+      "properties": {
+        "liveness": { "$ref": "#/$defs/probe" },
+        "readiness": { "$ref": "#/$defs/probe" }
+      }
+    },
+    "controller": {
+      "type": "object",
+      "properties": {
+        "replicas": { "type": "integer", "minimum": 0 },
+        "extraArgs": { "type": "array", "items": { "type": "string" } },
+        "resources": { "type": "object" },
+        "podAnnotations": { "type": "object" },
+        "podLabels": { "type": "object" },
+        "nodeSelector": { "type": "object" },
+        "tolerations": { "type": "array" },
+        "affinity": { "type": "object" },
+        "priorityClassName": { "type": "string" },
+        "provisioner": {
+          "type": "object",
+          "properties": {
+            "image": { "$ref": "#/$defs/sidecarImage" },
+            "extraArgs": { "type": "array", "items": { "type": "string" } },
+            "resources": { "type": "object" }
+          }
+        }
+      }
+    },
+    "node": {
+      "type": "object",
+      "properties": {
+        "kubeletDir": { "type": "string", "pattern": "^/" },
+        "webdavPort": { "type": "integer", "minimum": 1024, "maximum": 65535 },
+        "stateDir": { "type": "string", "pattern": "^/" },
+        "extraArgs": { "type": "array", "items": { "type": "string" } },
+        "resources": { "type": "object" },
+        "podAnnotations": { "type": "object" },
+        "podLabels": { "type": "object" },
+        "nodeSelector": { "type": "object" },
+        "tolerations": { "type": "array" },
+        "affinity": { "type": "object" },
+        "priorityClassName": { "type": "string" },
+        "updateStrategy": { "type": "object" },
+        "registrar": {
+          "type": "object",
+          "properties": {
+            "image": { "$ref": "#/$defs/sidecarImage" },
+            "resources": { "type": "object" }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "serviceAccount": {
+      "type": "object",
+      "properties": {
+        "create": { "type": "boolean" },
+        "name": { "type": "string" },
+        "annotations": { "type": "object" }
+      }
+    },
+    "probe": {
+      "type": "object",
+      "properties": {
+        "initialDelaySeconds": { "type": "integer", "minimum": 0 },
+        "periodSeconds": { "type": "integer", "minimum": 1 },
+        "timeoutSeconds": { "type": "integer", "minimum": 1 },
+        "failureThreshold": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "sidecarImage": {
+      "type": "object",
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string", "minLength": 1 },
+        "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+      },
+      "required": ["repository", "tag"]
+    }
+  }
+}

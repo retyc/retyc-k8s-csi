@@ -61,26 +61,40 @@ team ships, embedded from the official `retyc/retyc-cli` image. Full walkthrough
 
 ## Installation
 
+### With Helm (recommended)
+
+```sh
+read -rs RETYC_KEY_PASSPHRASE          # never on the command line history
+helm install retyc-csi ./charts/retyc-csi \
+  --namespace kube-system \
+  --set credentials.token="$RETYC_TOKEN" \
+  --set credentials.keyPassphrase="$RETYC_KEY_PASSPHRASE"
+
+kubectl -n kube-system get pods -l app.kubernetes.io/instance=retyc-csi   # 2/2 Running
+```
+
+The chart installs the `CSIDriver`, RBAC, the controller `Deployment`, the node `DaemonSet` and the three
+StorageClasses. `credentials.existingSecret` points it at a Secret you manage yourself; without any credentials the
+driver serves per-namespace identities only. Every value is documented in
+[charts/retyc-csi/README.md](charts/retyc-csi/README.md).
+
+### With plain manifests
+
+`deploy/` holds the same resources as raw YAML, used by the development loop:
+
+```sh
+cp deploy/secret.yaml.example deploy/secret.yaml     # RETYC_TOKEN + RETYC_KEY_PASSPHRASE
+kubectl apply -f deploy/secret.yaml
+make deploy
+```
+
 ### Container image
 
-The image bundles the driver, `davfs2` and the `retyc` CLI. Build and push it to your registry, or use it locally:
+The image bundles the driver, `davfs2` and the `retyc` CLI. Build and push it to your registry:
 
 ```sh
 make image                              # retyc/retyc-k8s-csi:dev
 make image RETYC_VERSION=v1.2.0         # pin the embedded retyc-cli release
-```
-
-### Deploy
-
-```sh
-# 1. The cluster-wide Retyc identity
-cp deploy/secret.yaml.example deploy/secret.yaml
-#    fill in RETYC_TOKEN (retyc auth login --offline) and RETYC_KEY_PASSPHRASE
-kubectl apply -f deploy/secret.yaml
-
-# 2. CSIDriver, RBAC, controller Deployment, node DaemonSet, StorageClasses
-make deploy
-kubectl -n kube-system get pods -l 'app in (retyc-csi-controller, retyc-csi-node)'   # 2/2 Running
 ```
 
 ---
@@ -186,6 +200,7 @@ credential shows up as a `1/2` NotReady pod, never as a restart loop. See
 |--------------------------------|--------------------------------------------------|
 | Architecture & volume lifecycle | [doc/architecture.md](doc/architecture.md)       |
 | Configuration (flags, Secret, StorageClasses, probes) | [doc/configuration.md](doc/configuration.md) |
+| Helm chart values              | [charts/retyc-csi/README.md](charts/retyc-csi/README.md) |
 | Troubleshooting                | [doc/troubleshooting.md](doc/troubleshooting.md) |
 | Testing (unit, csi-sanity, k3s VM) | [doc/testing.md](doc/testing.md)             |
 
@@ -197,6 +212,7 @@ credential shows up as a `1/2` NotReady pod, never as a restart loop. See
 make build        # local binary, both modes
 make test         # go test -race ./...
 make lint         # golangci-lint, same rules as retyc-cli
+make helm-lint    # chart lint + render in every credential mode
 make image        # container image
 
 # Full end-to-end environment: single-node k3s on Debian trixie, Vagrant + libvirt

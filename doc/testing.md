@@ -54,6 +54,7 @@ make vm-ssh       # a shell inside; kubectl works without sudo there
 | `make vm-load` | `docker save` the driver image into k3s' containerd |
 | `make vm-secret` | Creates the `retyc-csi-credentials` Secret from `RETYC_TOKEN`/`RETYC_KEY_PASSPHRASE` |
 | `make vm-deploy` | `vagrant rsync` + applies `deploy/*.yaml` inside the VM |
+| `make vm-helm` | Installs Helm in the VM if needed, then `helm upgrade --install` of the chart against the same Secret. Exclusive with `vm-deploy` (same resource names): delete one before using the other |
 | `make vm-restart` | Restarts controller + node plugin (needed after every `vm-load`: the `:dev` tag never triggers a rollout by itself) |
 | `make vm-ssh` | `vagrant ssh` |
 | `make vm-destroy` | `vagrant destroy -f` (the box stays cached) |

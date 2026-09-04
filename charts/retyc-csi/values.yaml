@@ -1,0 +1,159 @@
+# Default values for retyc-csi.
+
+image:
+  repository: retyc/retyc-k8s-csi
+  # -- Overrides the image tag; defaults to the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# -- Pull secrets for the driver image (the sidecar images are public).
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+credentials:
+  # -- Create the Secret holding the cluster-wide Retyc identity from `token` and `keyPassphrase`.
+  # Leave both empty (and `existingSecret` unset) to run without a default identity: only
+  # StorageClasses with a `tenantSecretName` will work.
+  create: true
+  # -- Name of an existing Secret with keys RETYC_TOKEN and RETYC_KEY_PASSPHRASE. Takes precedence over `create`.
+  existingSecret: ""
+  # -- Offline token, minted with `retyc auth login --offline`.
+  token: ""
+  # -- Passphrase of the account's AGE key.
+  keyPassphrase: ""
+
+storageClasses:
+  # Each entry becomes a StorageClass provisioned by this driver. `tenantSecretName` switches the
+  # class to per-namespace identities: the provisioner and kubelet resolve a Secret of that name in
+  # the claim's namespace instead of using the driver's own credentials.
+  - name: retyc-rwx
+    reclaimPolicy: Delete
+    volumeBindingMode: Immediate
+    isDefault: false
+    annotations: {}
+    tenantSecretName: ""
+  - name: retyc-rwx-retain
+    reclaimPolicy: Retain
+    volumeBindingMode: Immediate
+    isDefault: false
+    annotations: {}
+    tenantSecretName: ""
+  - name: retyc-rwx-tenant
+    # Retain on purpose: a tenant deleting its Secret before its claims would otherwise leave PVs
+    # stuck on a DeleteVolume that can no longer authenticate.
+    reclaimPolicy: Retain
+    volumeBindingMode: Immediate
+    isDefault: false
+    annotations: {}
+    tenantSecretName: retyc-credentials
+
+rbac:
+  # -- Create the ClusterRole/ClusterRoleBinding for the provisioner.
+  create: true
+
+serviceAccount:
+  controller:
+    create: true
+    # -- Defaults to `<fullname>-controller`.
+    name: ""
+    annotations: {}
+  node:
+    create: true
+    # -- Defaults to `<fullname>-node`.
+    name: ""
+    annotations: {}
+
+# -- Port of the driver's /healthz and /readyz endpoints, in both components.
+healthPort: 9808
+
+# -- klog verbosity of the driver containers.
+logLevel: 2
+
+probes:
+  # Liveness is deliberately lenient: restarting the node plugin breaks every mount on that node,
+  # so only a driver that stopped serving HTTP altogether should trip it. Readiness carries the
+  # real diagnosis and only flips the pod to NotReady.
+  liveness:
+    initialDelaySeconds: 10
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 5
+  readiness:
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 2
+
+controller:
+  replicas: 1
+  # -- Extra arguments for the driver container.
+  extraArgs: []
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      memory: 512Mi
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  priorityClassName: system-cluster-critical
+  provisioner:
+    image:
+      repository: registry.k8s.io/sig-storage/csi-provisioner
+      tag: v5.1.0
+      pullPolicy: IfNotPresent
+    # -- Extra arguments for csi-provisioner (e.g. `--leader-election` with more than one replica).
+    extraArgs: []
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        memory: 128Mi
+
+node:
+  # -- Root of the kubelet state on the nodes.
+  kubeletDir: /var/lib/kubelet
+  # -- First loopback port of the supervised `retyc webdav serve` servers (one per identity, consecutive ports).
+  webdavPort: 8888
+  # -- Per-identity state of the retyc servers, inside the container.
+  stateDir: /var/lib/retyc-csi
+  # -- Extra arguments for the driver container.
+  extraArgs: []
+  # Steady state is ~40 MiB per identity served on the node; unlocking an AGE key needs ~256 MiB
+  # transiently (scrypt). A limit below ~350 MiB OOM-kills the plugin on the first mount, and with
+  # it every mount on the node. Raise it with the number of tenant identities per node.
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      memory: 512Mi
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  # -- Run on every node, tainted or not, like other CSI node plugins.
+  tolerations:
+    - operator: Exists
+  affinity: {}
+  priorityClassName: system-node-critical
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Each node plugin restart breaks the mounts on that node: one node at a time.
+      maxUnavailable: 1
+  registrar:
+    image:
+      repository: registry.k8s.io/sig-storage/csi-node-driver-registrar
+      tag: v2.12.0
+      pullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 10m
+        memory: 16Mi
+      limits:
+        memory: 64Mi
