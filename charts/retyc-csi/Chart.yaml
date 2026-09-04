@@ -3,7 +3,7 @@ name: retyc-csi
 description: Kubernetes CSI driver for Retyc datarooms - ReadWriteMany volumes with end-to-end post-quantum encryption
 type: application
 version: 0.1.0
-appVersion: "0.1.0"
+appVersion: "v0.1.0"
 kubeVersion: ">=1.25.0-0"
 home: https://retyc.com
 sources:

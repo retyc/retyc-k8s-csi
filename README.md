@@ -1,6 +1,7 @@
 <p align="center"><img width="200" src=".media/Retyc_Logo_Blue.png" alt="Retyc logo" /></p>
 
 <p align="center">
+  <a href="https://github.com/retyc/retyc-k8s-csi/actions/workflows/main.yml"><img src="https://github.com/retyc/retyc-k8s-csi/actions/workflows/main.yml/badge.svg" alt="CI" /></a>
   <a href="https://kubernetes-csi.github.io/docs/"><img src="https://img.shields.io/badge/CSI-1.11-326ce5.svg" alt="CSI 1.11" /></a>
   <a href="go.mod"><img src="https://img.shields.io/badge/go-1.26-00ADD8.svg" alt="Go 1.26" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT" /></a>
@@ -65,7 +66,7 @@ team ships, embedded from the official `retyc/retyc-cli` image. Full walkthrough
 
 ```sh
 read -rs RETYC_KEY_PASSPHRASE          # never on the command line history
-helm install retyc-csi ./charts/retyc-csi \
+helm install retyc-csi oci://ghcr.io/retyc/charts/retyc-csi \
   --namespace kube-system \
   --set credentials.token="$RETYC_TOKEN" \
   --set credentials.keyPassphrase="$RETYC_KEY_PASSPHRASE"
@@ -73,8 +74,9 @@ helm install retyc-csi ./charts/retyc-csi \
 kubectl -n kube-system get pods -l app.kubernetes.io/instance=retyc-csi   # 2/2 Running
 ```
 
-The chart installs the `CSIDriver`, RBAC, the controller `Deployment`, the node `DaemonSet` and the three
-StorageClasses. `credentials.existingSecret` points it at a Secret you manage yourself; without any credentials the
+Every release publishes the chart to `oci://ghcr.io/retyc/charts` and the image to `ghcr.io/retyc/retyc-k8s-csi`
+and Docker Hub, tagged with the release; from a checkout, `./charts/retyc-csi` works the same way. The chart installs
+the `CSIDriver`, RBAC, the controller `Deployment`, the node `DaemonSet` and the three StorageClasses. `credentials.existingSecret` points it at a Secret you manage yourself; without any credentials the
 driver serves per-namespace identities only. Every value is documented in
 [charts/retyc-csi/README.md](charts/retyc-csi/README.md).
 
@@ -218,6 +220,11 @@ make image        # container image
 # Full end-to-end environment: single-node k3s on Debian trixie, Vagrant + libvirt
 make vm-up        # boot + provision, then: make image vm-load vm-secret vm-deploy
 ```
+
+CI (GitHub Actions) runs lint, tests with the race detector, `govulncheck`, the chart lint with `kubeconform`
+against the oldest and newest supported Kubernetes, and a full image build on every push. A `v*` tag publishes
+the multi-arch image, the chart and a GitHub release. The end-to-end run against a real cluster needs
+virtualisation and stays local, in the Vagrant VM.
 
 ---
 

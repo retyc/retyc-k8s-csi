@@ -1,0 +1,65 @@
+name: _Docker
+
+on:
+  workflow_call:
+    inputs:
+      tags:
+        description: "Newline-separated list of image tags"
+        required: true
+        type: string
+      version:
+        description: "Version string for the VERSION build-arg and the OCI labels"
+        required: true
+        type: string
+      retyc-version:
+        description: "retyc-cli image tag to embed"
+        required: false
+        type: string
+        default: latest
+
+jobs:
+  docker:
+    name: Push image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build date
+        id: date
+        run: echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          provenance: mode=max,version=v1
+          sbom: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ inputs.tags }}
+          build-args: |
+            VERSION=${{ inputs.version }}
+            REVISION=${{ github.sha }}
+            CREATED=${{ steps.date.outputs.created }}
+            RETYC_VERSION=${{ inputs.retyc-version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

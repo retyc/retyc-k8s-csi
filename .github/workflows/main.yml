@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+    paths: &code_paths
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Dockerfile'
+      - 'charts/**'
+      - '.github/workflows/main.yml'
+      - '.github/workflows/_ci.yml'
+      - '.github/workflows/_docker.yml'
+  pull_request:
+    paths: *code_paths
+
+jobs:
+  ci:
+    name: CI
+    uses: ./.github/workflows/_ci.yml
+
+  docker-latest:
+    name: Docker latest
+    needs: ci
+    if: >-
+      github.event_name == 'push'
+      && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/_docker.yml
+    with:
+      tags: |
+        ghcr.io/retyc/retyc-k8s-csi:latest
+        retyc/retyc-k8s-csi:latest
+      version: latest
+    secrets: inherit
