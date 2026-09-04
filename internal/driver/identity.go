@@ -1,8 +1,7 @@
-// Package driver implements the CSI Identity, Controller and Node gRPC services for the Retyc
-// CSI POC. Retyc datarooms, mounted via retyc-cli's WebDAV server + davfs2, back an RWX
-// filesystem volume — see /home/triplestack/.claude/plans/buzzing-juggling-fern.md for the full
-// design and its accepted POC trade-offs (no resize/snapshot, no per-dataroom capacity
-// enforcement, eventually-consistent shared filesystem).
+// Package driver implements the CSI Identity, Controller and Node gRPC services of the Retyc
+// CSI driver. Retyc datarooms, mounted via retyc-cli's WebDAV server + davfs2, back an RWX
+// filesystem volume — see doc/architecture.md for the design and its trade-offs (no
+// resize/snapshot, no per-dataroom capacity enforcement, eventually-consistent shared filesystem).
 package driver
 
 import (

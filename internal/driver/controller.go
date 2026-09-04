@@ -77,7 +77,7 @@ func (s *ControllerServer) CreateVolume(
 	// no unique constraint on the backend (a racing double-create is still possible), and `retyc
 	// dataroom ls` only returns page 1 (see retycclient.DataroomList.Complete) — past that, a
 	// retried CreateVolume for a dataroom on a later page would create a duplicate. Acceptable for
-	// a POC; logged loudly so it's visible when it starts to matter.
+	// accepted for now; logged loudly so it's visible when it starts to matter.
 	existing, err := s.Retyc.ListDatarooms(ctx)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "listing datarooms: %v", err)
@@ -116,7 +116,7 @@ func (s *ControllerServer) CreateVolume(
 }
 
 // createVolumeResponse builds the CSI response for a dataroom. Requested capacity is echoed back
-// unmodified (best-effort, per the plan: Retyc has no per-dataroom size cap to enforce it
+// unmodified (best-effort: Retyc has no per-dataroom size cap to enforce it
 // against). VolumeContext carries the dataroom title so NodeStageVolume can build the WebDAV
 // mount path without a separate ID→title lookup.
 func createVolumeResponse(id, title string, req *csi.CreateVolumeRequest) *csi.CreateVolumeResponse {

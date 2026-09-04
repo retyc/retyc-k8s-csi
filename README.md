@@ -1,85 +1,202 @@
-# retyc-k8s-csi (POC)
+<p align="center"><img width="200" src=".media/Retyc_Logo_Blue.png" alt="Retyc logo" /></p>
 
-A Kubernetes CSI driver that provisions RWX `PersistentVolume`s backed by [Retyc](https://retyc.com)
-datarooms. One PV = one dataroom, mounted node-side through `retyc-cli`'s built-in WebDAV server
-and `davfs2`.
+<p align="center">
+  <a href="https://kubernetes-csi.github.io/docs/"><img src="https://img.shields.io/badge/CSI-1.11-326ce5.svg" alt="CSI 1.11" /></a>
+  <a href="go.mod"><img src="https://img.shields.io/badge/go-1.26-00ADD8.svg" alt="Go 1.26" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT" /></a>
+</p>
 
-See [`~/.claude/plans/buzzing-juggling-fern.md`](/home/triplestack/.claude/plans/buzzing-juggling-fern.md)
-for the full design, the trade-offs accepted for this POC, and the staged verification plan.
+# Retyc CSI Driver
 
-## Status
+> Kubernetes CSI driver for [Retyc](https://retyc.com) datarooms - `ReadWriteMany` persistent volumes with end-to-end
+> post-quantum encryption, shared between pods and nodes, with the data staying in Europe.
 
-This is a POC, not production-ready:
+---
 
-- **Eventually consistent, not POSIX-strict RWX.** The WebDAV lock system is in-memory/per-process
-  and directory listings are cached ~30s — fine for sharing config/small artefacts between pods,
-  not for high-churn concurrent writes to the same file.
-- **No resize, no snapshots, no per-dataroom capacity enforcement.** Requested PVC sizes are
-  accepted and echoed back but not actually limited by the backend.
-- **Single shared Retyc identity for the whole cluster** — no per-tenant credentials.
-- **WebDAV `--auth` is deliberately off**: the supervised `retyc webdav serve` and the `davfs2`
-  mount both run inside the same node-plugin container/netns, so loopback-only really is the
-  trust boundary here.
-- **Mounts are world-writable inside the pod** (`dir_mode=0777,file_mode=0666`): `fsGroup`
-  can't be applied to a WebDAV/FUSE mount, so this is how non-root pods get write access. Two
-  caveats: those modes only apply to entries davfs2 discovers on the server; a file *created*
-  through the mount keeps the mode the kernel derived from the creating pod's umask (typically
-  0644 for root), until the plugin restarts and the metadata cache is rebuilt. And davfs2 does
-  its own permission checks, which start with `getpwuid()` of the calling uid *inside the plugin
-  container* — the image ships `libnss-unknown` so that arbitrary `runAsUser` values resolve.
-- **A node-plugin pod restart kills every davfs2 mount on that node.** The FUSE daemons live in
-  the plugin container; pods then see "Transport endpoint is not connected" until they are
-  rescheduled/remounted (the driver does clean up the corrupted mounts on the next
-  stage/unstage). Production FUSE-based CSI drivers work around this by running the daemon on
-  the host — out of scope for this POC.
-- **`CreateVolume` idempotency only sees the first page of `retyc dataroom ls`** (the CLI has no
-  `--page` flag); a retried create past that page can produce a duplicate dataroom. Logged as a
-  warning when it becomes possible.
-- Validated end-to-end on a single-node k3s (Debian trixie VM, see [`doc/testing.md`](doc/testing.md)):
-  PVC bound, davfs2 mount propagated to the host, root and uid-1000 pods sharing one volume.
-  Multi-node behaviour is untested.
+## What is Retyc?
 
-## Build
+[Retyc](https://retyc.com) is a European sovereign file-sharing platform with end-to-end post-quantum encryption. Data
+stays in Europe, GDPR-compliant by design.
+
+`retyc-k8s-csi` turns Retyc datarooms into Kubernetes volumes: one `PersistentVolumeClaim` is one dataroom, mounted on
+every node that needs it. Files are encrypted and decrypted on the node by the official
+[`retyc-cli`](https://github.com/retyc/retyc-cli); the Retyc servers never see plaintext.
+
+---
+
+## How it works
+
+```
+   PersistentVolumeClaim                                 Pod
+          │                                               │ /data
+          ▼                                               ▼
+  ┌─ controller ──────────┐              ┌─ node plugin (DaemonSet) ────────────────────┐
+  │ csi-provisioner       │              │ node-driver-registrar                        │
+  │ retyc-k8s-csi         │              │ retyc-k8s-csi ── mount -t davfs ──▶ davfs2   │
+  │   └─ retyc dataroom   │              │   └─ retyc webdav serve ◀── loopback ────┘   │
+  │      create / rm      │              └──────────────┬───────────────────────────────┘
+  └──────────┬────────────┘                             │  encrypted chunks
+             ▼                                          ▼
+                              Retyc API
+```
+
+- **Controller** (`--mode=controller`, one replica): creates a dataroom per `CreateVolume`, deletes it on `DeleteVolume`.
+- **Node plugin** (`--mode=node`, one per node): supervises a local `retyc webdav serve`, mounts each dataroom with
+  `davfs2` on a per-volume staging path, then bind-mounts it into every pod that uses the claim.
+- **Sidecars**: the standard `csi-provisioner` and `csi-node-driver-registrar` from kubernetes-csi.
+
+The driver never speaks to the Retyc API itself: every operation goes through the same vetted `retyc` binary the CLI
+team ships, embedded from the official `retyc/retyc-cli` image. Full walkthrough: [doc/architecture.md](doc/architecture.md).
+
+---
+
+## Requirements
+
+- Kubernetes 1.25+ with a kubelet that allows privileged pods and `mountPropagation: Bidirectional` on the nodes
+- `/dev/fuse` on every node (davfs2 is a FUSE filesystem)
+- A Retyc account, an offline token (`retyc auth login --offline`) and the passphrase of its AGE key
+- Outbound HTTPS from the nodes to `api.retyc.com`
+
+---
+
+## Installation
+
+### Container image
+
+The image bundles the driver, `davfs2` and the `retyc` CLI. Build and push it to your registry, or use it locally:
 
 ```sh
-make build   # local binary, both --mode=controller and --mode=node
-make image   # container image (embeds the official retyc/retyc-cli image + davfs2)
+make image                              # retyc/retyc-k8s-csi:dev
+make image RETYC_VERSION=v1.2.0         # pin the embedded retyc-cli release
 ```
+
+### Deploy
+
+```sh
+# 1. The cluster-wide Retyc identity
+cp deploy/secret.yaml.example deploy/secret.yaml
+#    fill in RETYC_TOKEN (retyc auth login --offline) and RETYC_KEY_PASSPHRASE
+kubectl apply -f deploy/secret.yaml
+
+# 2. CSIDriver, RBAC, controller Deployment, node DaemonSet, StorageClasses
+make deploy
+kubectl -n kube-system get pods -l 'app in (retyc-csi-controller, retyc-csi-node)'   # 2/2 Running
+```
+
+---
+
+## Quick start
+
+```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: shared-data
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: retyc-rwx
+  resources:
+    requests:
+      storage: 1Gi
+```
+
+Every pod mounting `shared-data` - on any node - reads and writes the same dataroom. The dataroom appears in
+`retyc dataroom ls` and in the web app under the name of the `PersistentVolume`.
+
+| StorageClass       | reclaimPolicy | Deleting the PVC                                                            |
+|--------------------|---------------|-----------------------------------------------------------------------------|
+| `retyc-rwx`        | `Delete`      | deletes the dataroom                                                        |
+| `retyc-rwx-retain` | `Retain`      | keeps the dataroom; the `PersistentVolume` stays `Released` until you delete it |
+
+An existing dataroom - retained or created by hand - can be adopted as a static volume: see
+[deploy/examples/static-pv.yaml](deploy/examples/static-pv.yaml). A complete writer/reader example lives in
+[deploy/examples/rwx-test.yaml](deploy/examples/rwx-test.yaml).
+
+---
+
+## Security
+
+- **Encryption**: files and metadata are encrypted on the node with [AGE](https://github.com/FiloSottile/age)
+  post-quantum hybrid keys by `retyc-cli`, before anything leaves the node. Retyc servers only ever see ciphertext.
+- **Identity**: one Retyc account per cluster, injected into the driver pods from a `Secret`. The offline token and the
+  key passphrase never appear on a command line or in a manifest other than that `Secret`.
+- **Trust boundary**: the WebDAV server listens on loopback inside the node plugin's own network namespace, and only the
+  `davfs2` mount in that same container talks to it. It is unreachable from pods and from the node.
+- **Pod access**: mounts are world-writable (`dir_mode=0777,file_mode=0666`) so that non-root pods can write - Kubernetes
+  `fsGroup` cannot be applied to a FUSE mount. Isolation between workloads is therefore at the claim level, not the
+  file level: one dataroom per team or application, not per user.
+
+---
+
+## Consistency model
+
+Retyc datarooms are an object store with versioning, not a POSIX filesystem. A volume behaves as an
+**eventually consistent** shared filesystem:
+
+- a file written on one node is visible on the others after a few seconds (davfs2 refresh + the CLI's listing cache);
+- overwriting a file creates a new version server-side;
+- there is no cross-node locking - concurrent writers to the same file lose lines, last upload wins.
+
+This suits shared configuration, build artefacts, documents and hand-offs between jobs. It does not suit databases,
+write-ahead logs or any workload that appends to one file from several places.
+
+---
 
 ## Health
 
-Both modes serve `/healthz` (liveness: process up) and `/readyz` (readiness) on `--http-endpoint`
-(default `:9808`); CSI `Probe` reports the same readiness. Node: the supervised
-`retyc webdav serve` answers on loopback (its last output line is in the error when it doesn't,
-e.g. `key passphrase check failed`). Controller: `retyc auth status` is authenticated (cached
-2 min). Liveness is deliberately lax on the node — restarting the plugin kills every davfs2 mount
-on that node — so a bad credential shows up as a `1/2` NotReady pod, with the reason on `/readyz` and in the
-container logs, not as a restart loop.
+Both modes serve `/healthz` (liveness) and `/readyz` (readiness) on `--http-endpoint` (default `:9808`), and the CSI
+`Probe` RPC reports the same readiness.
 
-## Deploy
+- **Node**: ready when the supervised `retyc webdav serve` answers on loopback. When it does not, `/readyz` returns
+  the process state and its last output line - e.g. `key passphrase check failed` - and the same line is logged.
+- **Controller**: ready when `retyc auth status` reports an authenticated account (checked every two minutes).
+
+Liveness is deliberately lenient on the node: restarting the plugin breaks every mount on that node, so a bad
+credential shows up as a `1/2` NotReady pod, never as a restart loop. See
+[doc/troubleshooting.md](doc/troubleshooting.md).
+
+---
+
+## Limitations
+
+- **No resize, no snapshots, no capacity enforcement.** Requested sizes are accepted and echoed back; Retyc does not cap
+  a dataroom's size.
+- **A node plugin restart breaks the mounts on that node.** The FUSE daemons live in the plugin container. Pods see
+  `Transport endpoint is not connected` until they are rescheduled; the driver cleans the stale mounts up on the next
+  stage/unstage. Plan node plugin upgrades like a node drain.
+- **One Retyc identity per cluster.** No per-namespace or per-tenant credentials yet.
+- **File modes are set at creation.** `dir_mode`/`file_mode` apply to entries discovered on the server; a file created
+  through the mount keeps the mode derived from the creating pod's umask until the plugin's metadata cache is rebuilt.
+- **`CreateVolume` idempotency checks the first page of `retyc dataroom ls` only.** A retried create past that page can
+  produce a duplicate dataroom; the driver logs a warning when it becomes possible.
+
+---
+
+## Documentation
+
+| Topic                          | Link                                             |
+|--------------------------------|--------------------------------------------------|
+| Architecture & volume lifecycle | [doc/architecture.md](doc/architecture.md)       |
+| Configuration (flags, Secret, StorageClasses, probes) | [doc/configuration.md](doc/configuration.md) |
+| Troubleshooting                | [doc/troubleshooting.md](doc/troubleshooting.md) |
+| Testing (unit, csi-sanity, k3s VM) | [doc/testing.md](doc/testing.md)             |
+
+---
+
+## Development
 
 ```sh
-cp deploy/secret.yaml.example deploy/secret.yaml
-# edit deploy/secret.yaml: RETYC_TOKEN (retyc auth login --offline) + RETYC_KEY_PASSPHRASE
-kubectl apply -f deploy/secret.yaml
-make deploy
+make build        # local binary, both modes
+make test         # go test -race ./...
+make lint         # golangci-lint, same rules as retyc-cli
+make image        # container image
+
+# Full end-to-end environment: single-node k3s on Debian trixie, Vagrant + libvirt
+make vm-up        # boot + provision, then: make image vm-load vm-secret vm-deploy
 ```
 
-Then create a `PersistentVolumeClaim` with `accessModes: [ReadWriteMany]` and one of the two
-StorageClasses:
+---
 
-| StorageClass | reclaimPolicy | Deleting the PVC… |
-|--------------|---------------|-------------------|
-| `retyc-rwx` | `Delete` | deletes the dataroom (`DeleteVolume`) |
-| `retyc-rwx-retain` | `Retain` | keeps the dataroom; the PV stays `Released` until you delete it, the dataroom until you `retyc dataroom rm` it |
+## License
 
-`deploy/examples/rwx-test.yaml` has a claim plus a writer and a reader pod;
-`deploy/examples/static-pv.yaml` shows how to re-adopt an existing dataroom (retained or created
-by hand) as a static PV.
-
-## Testing
-
-[`doc/testing.md`](doc/testing.md): staged plan from a manual WebDAV+davfs2 check up to a full
-single-node k3s cluster, with what to measure at each step. The cluster is a Debian trixie VM
-built by the `Vagrantfile` (libvirt/KVM) and driven through `make vm-up`, `vm-load`, `vm-secret`,
-`vm-deploy`.
+[MIT](LICENSE) - © Retyc / TripleStack SAS

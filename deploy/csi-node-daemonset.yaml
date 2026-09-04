@@ -1,7 +1,7 @@
 # Privileged: the node plugin needs to run `mount -t davfs` / bind-mount and have that mount
 # become visible to kubelet on the host (mountPropagation: Bidirectional) — the same requirement
 # every filesystem CSI node plugin (csi-driver-nfs, csi-driver-smb, ...) has. /dev/fuse is needed
-# for davfs2 itself. See the plan: the supervised `retyc webdav serve` and `mount.davfs` both run
+# for davfs2 itself. The supervised `retyc webdav serve` and `mount.davfs` both run
 # inside this same container/netns, so no hostNetwork is required.
 apiVersion: apps/v1
 kind: DaemonSet

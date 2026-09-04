@@ -1,6 +1,5 @@
 // Command retyc-k8s-csi is the entrypoint for both the CSI Controller plugin (--mode=controller)
-// and the CSI Node plugin (--mode=node) of the Retyc RWX CSI POC. See
-// /home/triplestack/.claude/plans/buzzing-juggling-fern.md for the architecture.
+// and the CSI Node plugin (--mode=node) of the Retyc CSI driver. See doc/architecture.md.
 package main
 
 import (

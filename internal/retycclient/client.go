@@ -48,7 +48,8 @@ func (e *Error) Error() string {
 
 // IsNotFound reports whether err is a retyc CLI error for a missing resource. The CLI has no
 // structured error codes yet, so this matches the API error text the CLI relays
-// (`API error 404: {"detail":"Dataroom not found"}`) — a documented POC-grade check.
+// (`API error 404: {"detail":"Dataroom not found"}`) — a string match on the CLI's error, by
+// design: the CLI exposes no error codes.
 func IsNotFound(err error) bool {
 	var e *Error
 	if !errors.As(err, &e) {

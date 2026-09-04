@@ -1,4 +1,4 @@
-# Testing retyc-k8s-csi
+# Testing
 
 Four stages, cheapest first. Each one validates an assumption the next one depends on, so don't
 skip straight to the cluster.
@@ -67,8 +67,8 @@ vagrant-libvirt 0.12.x noise, not an error.
 
 ## Stage 1 — WebDAV + davfs2 by hand
 
-This is the riskiest assumption in the design (see the plan: eventually-consistent RWX), so test it
-before anything else.
+This is the riskiest assumption in the design (an eventually consistent RWX filesystem, see
+[architecture.md](architecture.md#consistency)), so test it before anything else.
 
 ```sh
 make vm-ssh
@@ -191,11 +191,9 @@ make vm-deploy      # rsync + kubectl apply deploy/*.yaml in the VM
 vagrant ssh -c "kubectl -n kube-system get pods -l 'app in (retyc-csi-controller, retyc-csi-node)' -w"
 ```
 
-Both pods must be `Running` and `2/2` ready. The driver containers serve `/healthz` (liveness:
-process up) and `/readyz` (readiness: node — the supervised `retyc webdav serve` answers on
-loopback; controller — `retyc auth status` says authenticated, cached 2 min) on port 9808, and
-CSI `Probe` reports the same readiness. A `1/2` pod is the driver refusing to be ready; kubelet's
-event only says `503`, the reason is on `/readyz` and in the driver's logs:
+Both pods must be `Running` and `2/2` ready (probes: [configuration.md](configuration.md#probes-and-resources)).
+A `1/2` pod is the driver refusing to be ready; kubelet's event only says `503`, the reason is on
+`/readyz` and in the driver's logs:
 
 ```sh
 curl -s "http://$(kubectl -n kube-system get pod -l app=retyc-csi-node -o jsonpath='{.items[0].status.podIP}'):9808/readyz"

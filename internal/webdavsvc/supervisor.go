@@ -1,6 +1,6 @@
 // Package webdavsvc supervises a single long-lived `retyc webdav serve` child process per node.
 // One process exposes every dataroom the node identity can see under /dataroom/<title>; the node
-// plugin mounts individual dataroom subpaths via davfs2 against it (see the plan: no --auth,
+// plugin mounts individual dataroom subpaths via davfs2 against it (no --auth:
 // since the server and the davfs2 client both run inside the same node-plugin container/netns —
 // loopback-only really is loopback-only here, not a wider trust boundary).
 package webdavsvc
