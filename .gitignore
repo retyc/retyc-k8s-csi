@@ -2,3 +2,4 @@
 /dist
 deploy/secret.yaml
 /.vagrant/
+/.idea
