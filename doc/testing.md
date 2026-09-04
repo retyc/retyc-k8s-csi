@@ -248,7 +248,31 @@ kubectl -n kube-system rollout restart ds/retyc-csi-node deploy/retyc-csi-contro
 # ... then `make vm-secret` from the host and restart again to put the real ones back.
 ```
 
-### 4.4 Teardown — and verify the dataroom is gone
+### 4.4 Retain, and re-adopting a dataroom
+
+Same claim against the `retyc-rwx-retain` class: deleting the PVC must leave both the PV
+(`Released`) and the dataroom behind, and a static PV must bring the data back. In the VM:
+
+```sh
+sed 's/storageClassName: retyc-rwx$/storageClassName: retyc-rwx-retain/' /vagrant/deploy/examples/rwx-test.yaml | kubectl apply -f -
+kubectl wait --for=condition=Ready pod/retyc-writer --timeout=120s
+id=$(kubectl get pv -o jsonpath='{.items[?(@.spec.claimRef.name=="retyc-rwx-test")].spec.csi.volumeHandle}')
+title=$(kubectl get pv -o jsonpath='{.items[?(@.spec.claimRef.name=="retyc-rwx-test")].spec.csi.volumeAttributes.title}')
+
+kubectl delete pod retyc-writer retyc-reader && kubectl delete pvc retyc-rwx-test
+kubectl get pv                                        # STATUS Released, RECLAIM POLICY Retain
+retyc --json dataroom ls | grep -c "$title"           # (host) 1 — DeleteVolume was never called
+kubectl delete pv "$title"                            # the dataroom still exists afterwards
+
+sed "s/REPLACE-WITH-DATAROOM-ID.*/$id/; s/REPLACE-WITH-DATAROOM-TITLE.*/$title/" /vagrant/deploy/examples/static-pv.yaml | kubectl apply -f -
+kubectl get pvc retyc-adopted                         # Bound, no new dataroom created
+kubectl run adopted --image=busybox:1.36 --restart=Never --overrides='{"spec":{"containers":[{"name":"c","image":"busybox:1.36","command":["cat","/data/log.txt"],"volumeMounts":[{"name":"d","mountPath":"/data"}]}],"volumes":[{"name":"d","persistentVolumeClaim":{"claimName":"retyc-adopted"}}]}}'
+kubectl logs adopted                                  # the writer's lines are back
+kubectl delete pod adopted; kubectl delete pvc retyc-adopted; kubectl delete pv retyc-adopted
+retyc --json dataroom rm retyc://$id -y               # (host) manual cleanup is the point of Retain
+```
+
+### 4.5 Teardown — and verify the dataroom is gone
 
 ```sh
 vagrant ssh -c "kubectl delete -f /vagrant/deploy/examples/rwx-test.yaml"

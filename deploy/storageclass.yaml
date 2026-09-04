@@ -11,3 +11,15 @@ metadata:
 provisioner: csi.retyc.com
 reclaimPolicy: Delete
 volumeBindingMode: Immediate
+---
+# Same thing, but deleting the PVC keeps the dataroom: the PV goes to Released and the
+# external-provisioner never calls DeleteVolume for a Retain PV. The Retyc data outlives the
+# cluster object; delete the dataroom yourself (`retyc dataroom rm`) or re-adopt it with a
+# static PV (deploy/examples/static-pv.yaml).
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: retyc-rwx-retain
+provisioner: csi.retyc.com
+reclaimPolicy: Retain
+volumeBindingMode: Immediate

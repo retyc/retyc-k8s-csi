@@ -55,9 +55,17 @@ kubectl apply -f deploy/secret.yaml
 make deploy
 ```
 
-Then create a `PersistentVolumeClaim` with `storageClassName: retyc-rwx` and
-`accessModes: [ReadWriteMany]` — `deploy/examples/rwx-test.yaml` has one plus a writer and a
-reader pod.
+Then create a `PersistentVolumeClaim` with `accessModes: [ReadWriteMany]` and one of the two
+StorageClasses:
+
+| StorageClass | reclaimPolicy | Deleting the PVC… |
+|--------------|---------------|-------------------|
+| `retyc-rwx` | `Delete` | deletes the dataroom (`DeleteVolume`) |
+| `retyc-rwx-retain` | `Retain` | keeps the dataroom; the PV stays `Released` until you delete it, the dataroom until you `retyc dataroom rm` it |
+
+`deploy/examples/rwx-test.yaml` has a claim plus a writer and a reader pod;
+`deploy/examples/static-pv.yaml` shows how to re-adopt an existing dataroom (retained or created
+by hand) as a static PV.
 
 ## Testing
 
