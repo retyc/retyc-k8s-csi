@@ -54,6 +54,7 @@ make vm-ssh       # a shell inside; kubectl works without sudo there
 | `make vm-load` | `docker save` the driver image into k3s' containerd |
 | `make vm-secret` | Creates the `retyc-csi-credentials` Secret from `RETYC_TOKEN`/`RETYC_KEY_PASSPHRASE` |
 | `make vm-deploy` | `vagrant rsync` + applies `deploy/*.yaml` inside the VM |
+| `make vm-restart` | Restarts controller + node plugin (needed after every `vm-load`: the `:dev` tag never triggers a rollout by itself) |
 | `make vm-ssh` | `vagrant ssh` |
 | `make vm-destroy` | `vagrant destroy -f` (the box stays cached) |
 
@@ -190,7 +191,18 @@ make vm-deploy      # rsync + kubectl apply deploy/*.yaml in the VM
 vagrant ssh -c "kubectl -n kube-system get pods -l 'app in (retyc-csi-controller, retyc-csi-node)' -w"
 ```
 
-Both pods must be `Running` with all containers ready. If not (in the VM):
+Both pods must be `Running` and `2/2` ready. The driver containers serve `/healthz` (liveness:
+process up) and `/readyz` (readiness: node — the supervised `retyc webdav serve` answers on
+loopback; controller — `retyc auth status` says authenticated, cached 2 min) on port 9808, and
+CSI `Probe` reports the same readiness. A `1/2` pod is the driver refusing to be ready; kubelet's
+event only says `503`, the reason is on `/readyz` and in the driver's logs:
+
+```sh
+curl -s "http://$(kubectl -n kube-system get pod -l app=retyc-csi-node -o jsonpath='{.items[0].status.podIP}'):9808/readyz"
+kubectl -n kube-system logs ds/retyc-csi-node -c retyc-csi-node | grep '/readyz'
+```
+
+If a pod isn't `Running` at all (in the VM):
 
 ```sh
 kubectl -n kube-system logs deploy/retyc-csi-controller -c retyc-csi-controller
@@ -199,8 +211,7 @@ kubectl -n kube-system logs ds/retyc-csi-node -c node-driver-registrar
 kubectl get csidriver csi.retyc.com                                    # attachRequired must be false
 ```
 
-Iterating on the driver is `make image vm-load` then, in the VM,
-`kubectl -n kube-system rollout restart deploy/retyc-csi-controller ds/retyc-csi-node`.
+Iterating on the driver (or picking up a new `retyc-cli` image) is `make image vm-load vm-restart`.
 
 ### 4.2 Provision and use an RWX volume
 
@@ -240,11 +251,13 @@ kubectl -n kube-system delete pod -l app=retyc-csi-node
 kubectl exec retyc-writer -- ls /data               # expect "Transport endpoint is not connected"
 kubectl delete pod retyc-writer retyc-reader && kubectl apply -f /vagrant/deploy/examples/rwx-test.yaml   # remount recovers
 
-# Bad credentials: the node plugin's `retyc webdav serve` exits and is restarted every 5s;
-# NodeStageVolume fails with Unavailable after 30s instead of hanging.
-kubectl -n kube-system create secret generic retyc-csi-credentials --from-literal=RETYC_TOKEN=bad \
-  --from-literal=RETYC_KEY_PASSPHRASE=bad --dry-run=client -o yaml | kubectl apply -f -
-kubectl -n kube-system rollout restart ds/retyc-csi-node deploy/retyc-csi-controller
+# Bad credentials: `retyc webdav serve` exits within a second ("key passphrase check failed:
+# wrong key passphrase") and is restarted every 5s; the node pod goes 1/2 with that message on
+# /readyz and in its logs (same for the controller with a bad token, where the Deployment keeps
+# the previous, working pod until the new one is Ready). A new mount fails
+# with `Unavailable ... local webdav server not ready` after 30s instead of hanging, and the pod
+# sits in ContainerCreating. Pods stuck that way recover on their own once the real credentials
+# are back and the DaemonSet restarted — kubelet just retries MountDevice.
 # ... then `make vm-secret` from the host and restart again to put the real ones back.
 ```
 

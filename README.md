@@ -46,6 +46,16 @@ make build   # local binary, both --mode=controller and --mode=node
 make image   # container image (embeds the official retyc/retyc-cli image + davfs2)
 ```
 
+## Health
+
+Both modes serve `/healthz` (liveness: process up) and `/readyz` (readiness) on `--http-endpoint`
+(default `:9808`); CSI `Probe` reports the same readiness. Node: the supervised
+`retyc webdav serve` answers on loopback (its last output line is in the error when it doesn't,
+e.g. `key passphrase check failed`). Controller: `retyc auth status` is authenticated (cached
+2 min). Liveness is deliberately lax on the node — restarting the plugin kills every davfs2 mount
+on that node — so a bad credential shows up as a `1/2` NotReady pod, with the reason on `/readyz` and in the
+container logs, not as a restart loop.
+
 ## Deploy
 
 ```sh

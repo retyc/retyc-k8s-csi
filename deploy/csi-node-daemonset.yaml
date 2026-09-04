@@ -34,6 +34,34 @@ spec:
           args:
             - "--mode=node"
             - "--endpoint=unix:///csi/csi.sock"
+            - "--http-endpoint=:9808"
+          ports:
+            - name: health
+              containerPort: 9808
+          # Liveness is deliberately lax: a restart of this container kills every davfs2 mount
+          # on the node (the FUSE daemons live here), so only a driver that stopped serving HTTP
+          # altogether should trip it. /readyz carries the real diagnosis (supervised
+          # `retyc webdav serve` answering on loopback, with its last output when it isn't) and
+          # only flips the pod to NotReady; the reason is on /readyz and in this container's logs
+          # (kubelet's event carries the 503 alone).
+          livenessProbe:
+            httpGet: {path: /healthz, port: health}
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          readinessProbe:
+            httpGet: {path: /readyz, port: health}
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 2
+          # The steady state is ~40 MiB, but resolving a dataroom session runs an age scrypt
+          # (2^18 work factor: ~256 MiB of working memory, once per dataroom per process) inside
+          # `retyc webdav serve`. A limit below ~350 MiB OOM-kills the plugin on the first mount
+          # — and with it every mount on the node.
+          resources:
+            requests: {cpu: 10m, memory: 64Mi}
+            limits: {memory: 512Mi}
           env:
             - name: NODE_ID
               valueFrom:

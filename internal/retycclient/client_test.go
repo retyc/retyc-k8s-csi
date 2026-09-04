@@ -56,6 +56,9 @@ func TestRun_FakeBinary(t *testing.T) {
 case "$2 $3" in
   "dataroom create") printf '{"id":"dr-1","title":"%s"}\n' "$5" ;;
   "dataroom ls")     printf '{"items":[{"id":"dr-1","title":"a"}],"total":30,"page":1,"pages":2}\n' ;;
+  "auth status")
+    if [ "$RETYC_TOKEN" = "good" ]; then printf '{"authenticated":true,"offline":true}\n'
+    else printf '{"authenticated":false,"reason":"no_token"}\n'; fi ;;
   "dataroom rm")
     printf '\r\033[K{"error":"deleting dataroom: API error 404: {\\"detail\\":\\"Dataroom not found\\"}"}\n' >&2
     exit 1 ;;
@@ -77,6 +80,14 @@ esac
 	list, err := c.ListDatarooms(ctx)
 	if err != nil || len(list.Items) != 1 || list.Complete {
 		t.Fatalf("ListDatarooms: %+v, %v (Complete must be false when pages>1)", list, err)
+	}
+
+	if err := New(fake, []string{"RETYC_TOKEN=good"}).AuthStatusCheck(ctx); err != nil {
+		t.Fatalf("AuthStatusCheck authenticated: %v", err)
+	}
+	err = New(fake, []string{"RETYC_TOKEN=bad"}).AuthStatusCheck(ctx)
+	if err == nil || !strings.Contains(err.Error(), "no_token") {
+		t.Fatalf("AuthStatusCheck unauthenticated must fail with the reason, got %v", err)
 	}
 
 	_, err = c.DeleteDataroom(ctx, "dr-404")

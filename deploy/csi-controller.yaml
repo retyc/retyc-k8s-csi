@@ -29,6 +29,29 @@ spec:
           args:
             - "--mode=controller"
             - "--endpoint=unix:///csi/csi.sock"
+            - "--http-endpoint=:9808"
+          ports:
+            - name: health
+              containerPort: 9808
+          # /readyz runs `retyc auth status` (cached 2 min): the pod goes NotReady (reason on
+          # /readyz and in the logs) when the Secret's token is missing, expired or revoked. Being
+          # a Deployment, a rollout with bad credentials never replaces the last working pod.
+          livenessProbe:
+            httpGet: {path: /healthz, port: health}
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          readinessProbe:
+            httpGet: {path: /readyz, port: health}
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 2
+          # Every CreateVolume/DeleteVolume is a short-lived `retyc` subprocess; same scrypt
+          # caveat as the node plugin if it ever has to unlock the key.
+          resources:
+            requests: {cpu: 10m, memory: 64Mi}
+            limits: {memory: 512Mi}
           envFrom:
             - secretRef:
                 name: retyc-csi-credentials

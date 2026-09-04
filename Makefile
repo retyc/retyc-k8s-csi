@@ -4,7 +4,7 @@ IMAGE        ?= retyc/retyc-k8s-csi:dev
 RETYC_VERSION ?= latest
 MANIFESTS    := deploy/csidriver.yaml deploy/rbac.yaml deploy/csi-controller.yaml deploy/csi-node-daemonset.yaml deploy/storageclass.yaml
 
-.PHONY: build test vet lint clean image deploy vm-up vm-retyc vm-load vm-secret vm-deploy vm-ssh vm-destroy
+.PHONY: build test vet lint clean image deploy vm-up vm-retyc vm-load vm-secret vm-deploy vm-restart vm-ssh vm-destroy
 
 ## Build the driver binary (both controller and node modes)
 build:
@@ -69,6 +69,11 @@ vm-secret:
 vm-deploy:
 	vagrant rsync
 	vagrant ssh -c "kubectl apply $(addprefix -f /vagrant/,$(MANIFESTS))"
+
+## Restart controller + node plugin so they pick up a freshly loaded :dev image (IfNotPresent +
+## unchanged tag = no rollout on its own), and wait for both. Typical loop: make image vm-load vm-restart
+vm-restart:
+	vagrant ssh -c "kubectl -n kube-system rollout restart deploy/retyc-csi-controller ds/retyc-csi-node && kubectl -n kube-system rollout status deploy/retyc-csi-controller --timeout=180s && kubectl -n kube-system rollout status ds/retyc-csi-node --timeout=180s"
 
 ## Shell into the VM.
 vm-ssh:

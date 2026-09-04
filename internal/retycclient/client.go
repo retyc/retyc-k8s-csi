@@ -255,3 +255,25 @@ func (c *Client) Quota(ctx context.Context) (*UserQuota, error) {
 func (q *UserQuota) HasDataroomQuota() bool {
 	return q.MaxCountDataroom == nil || q.CountDataroom < *q.MaxCountDataroom
 }
+
+// AuthStatus mirrors retyc's authStatusJSON (cmd/output.go).
+type AuthStatus struct {
+	Authenticated bool   `json:"authenticated"`
+	Offline       bool   `json:"offline"`
+	Reason        string `json:"reason,omitempty"`
+}
+
+// AuthStatusCheck runs `retyc --json auth status`, which validates the configured token against
+// the auth server (refreshing it if needed), and fails when the account is not authenticated.
+// Note the CLI exits 0 either way — the verdict is in the JSON.
+func (c *Client) AuthStatusCheck(ctx context.Context) error {
+	var st AuthStatus
+	if err := c.run(ctx, &st, "auth", "status"); err != nil {
+		return err
+	}
+	if !st.Authenticated {
+		return fmt.Errorf("retyc not authenticated: %s", st.Reason)
+	}
+
+	return nil
+}

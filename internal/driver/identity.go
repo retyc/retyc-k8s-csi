@@ -10,6 +10,9 @@ import (
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/protobuf/types/known/wrapperspb"
+	"k8s.io/klog/v2"
+
+	"github.com/retyc/retyc-k8s-csi/internal/health"
 )
 
 // DriverName is advertised to kubelet/external-provisioner and referenced by the StorageClass's
@@ -23,6 +26,8 @@ const DriverVersion = "0.1.0"
 // processes (each runs its own gRPC server on its own unix socket).
 type IdentityServer struct {
 	csi.UnimplementedIdentityServer
+	// Ready is the same mode-specific check that backs /readyz (nil: always ready).
+	Ready health.Checker
 }
 
 func (s *IdentityServer) GetPluginInfo(context.Context, *csi.GetPluginInfoRequest) (*csi.GetPluginInfoResponse, error) {
@@ -51,6 +56,17 @@ func (s *IdentityServer) GetPluginCapabilities(
 // Probe reports readiness. It's intentionally a static OK: real health (retyc auth validity,
 // webdav server liveness) surfaces through CreateVolume/NodeStageVolume errors instead, since
 // there's no cheap, side-effect-free liveness check to run here.
-func (s *IdentityServer) Probe(context.Context, *csi.ProbeRequest) (*csi.ProbeResponse, error) {
+// Probe reports the same readiness as /readyz. Not-ready is a plain `ready: false`, not a gRPC
+// error: per the CSI spec an error here means "plugin is unhealthy, restart me", and on the node
+// a restart is exactly what we don't want for a transient webdav outage.
+func (s *IdentityServer) Probe(ctx context.Context, _ *csi.ProbeRequest) (*csi.ProbeResponse, error) {
+	if s.Ready != nil {
+		if err := s.Ready(ctx); err != nil {
+			klog.V(2).Infof("Probe: not ready: %v", err)
+
+			return &csi.ProbeResponse{Ready: wrapperspb.Bool(false)}, nil
+		}
+	}
+
 	return &csi.ProbeResponse{Ready: wrapperspb.Bool(true)}, nil
 }

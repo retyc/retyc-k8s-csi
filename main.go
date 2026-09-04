@@ -12,12 +12,14 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc"
 	"k8s.io/klog/v2"
 
 	"github.com/retyc/retyc-k8s-csi/internal/driver"
+	"github.com/retyc/retyc-k8s-csi/internal/health"
 	"github.com/retyc/retyc-k8s-csi/internal/mount"
 	"github.com/retyc/retyc-k8s-csi/internal/retycclient"
 	"github.com/retyc/retyc-k8s-csi/internal/webdavsvc"
@@ -33,28 +35,34 @@ func main() {
 			"bind address for the supervised 'retyc webdav serve' (node mode only)")
 		webdavPort = flag.Int("webdav-port", 8888,
 			"port for the supervised 'retyc webdav serve' (node mode only)")
+		httpEndpoint = flag.String("http-endpoint", ":9808",
+			"address for the /healthz (liveness) and /readyz (readiness) HTTP endpoints; empty disables them")
 	)
 	klog.InitFlags(nil)
 	flag.Parse()
 
-	if err := run(*mode, *endpoint, *retycBin, *nodeID, *webdavAddr, *webdavPort); err != nil {
+	if err := run(*mode, *endpoint, *retycBin, *nodeID, *webdavAddr, *webdavPort, *httpEndpoint); err != nil {
 		klog.Fatal(err)
 	}
 }
 
-func run(mode, endpoint, retycBin, nodeID, webdavAddr string, webdavPort int) error {
+// authStatusCacheTTL bounds how often the controller's readiness re-runs `retyc auth status`
+// (one auth-server round-trip) — kubelet probes every few seconds, the token doesn't change.
+const authStatusCacheTTL = 2 * time.Minute
+
+func run(mode, endpoint, retycBin, nodeID, webdavAddr string, webdavPort int, httpEndpoint string) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	server := grpc.NewServer()
-	csi.RegisterIdentityServer(server, &driver.IdentityServer{})
+	var ready health.Checker
 
 	switch mode {
 	case "controller":
 		env := os.Environ() // carries RETYC_TOKEN / RETYC_KEY_PASSPHRASE from the pod's Secret
-		csi.RegisterControllerServer(server, &driver.ControllerServer{
-			Retyc: retycclient.New(retycBin, env),
-		})
+		retyc := retycclient.New(retycBin, env)
+		ready = health.Cached(retyc.AuthStatusCheck, authStatusCacheTTL)
+		csi.RegisterControllerServer(server, &driver.ControllerServer{Retyc: retyc})
 	case "node":
 		if nodeID == "" {
 			nodeID = os.Getenv("NODE_ID") // set via the downward API (spec.nodeName) in the DaemonSet
@@ -74,6 +82,7 @@ func run(mode, endpoint, retycBin, nodeID, webdavAddr string, webdavPort int) er
 			Port:    webdavPort,
 		}
 		go webdav.Run(ctx)
+		ready = webdav.Healthy
 
 		csi.RegisterNodeServer(server, &driver.NodeServer{
 			NodeID:  nodeID,
@@ -82,6 +91,15 @@ func run(mode, endpoint, retycBin, nodeID, webdavAddr string, webdavPort int) er
 		})
 	default:
 		return fmt.Errorf("--mode must be \"controller\" or \"node\", got %q", mode)
+	}
+	csi.RegisterIdentityServer(server, &driver.IdentityServer{Ready: ready})
+
+	if httpEndpoint != "" {
+		go func() {
+			if err := health.ListenAndServe(ctx, httpEndpoint, health.Handler(ready)); err != nil {
+				klog.Errorf("health endpoints: %v", err)
+			}
+		}()
 	}
 
 	listener, err := listen(endpoint)
