@@ -29,7 +29,7 @@ clean:
 ## Build the container image (controller + node share one image, see main.go --mode).
 ## Override the embedded retyc-cli version with e.g. `make image RETYC_VERSION=v0.3.0`.
 image:
-	docker build --build-arg RETYC_VERSION=$(RETYC_VERSION) -t $(IMAGE) .
+	docker build --pull --build-arg RETYC_VERSION=$(RETYC_VERSION) -t $(IMAGE) .
 
 ## Apply every manifest under deploy/ (StorageClass, RBAC, Controller, DaemonSet) —
 ## deploy/secret.yaml.example is intentionally excluded: copy it, fill in real
