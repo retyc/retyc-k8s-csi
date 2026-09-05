@@ -53,8 +53,7 @@ make vm-ssh       # a shell inside; kubectl works without sudo there
 | `make vm-retyc` | Copies the host's `retyc` into the VM (`RETYC_BIN=…` to pick another) |
 | `make vm-load` | `docker save` the driver image into k3s' containerd |
 | `make vm-secret` | Creates the `retyc-csi-credentials` Secret from `RETYC_TOKEN`/`RETYC_KEY_PASSPHRASE` |
-| `make vm-deploy` | `vagrant rsync` + applies `deploy/*.yaml` inside the VM |
-| `make vm-helm` | Installs Helm in the VM if needed, then `helm upgrade --install` of the chart against the same Secret. Exclusive with `vm-deploy` (same resource names): delete one before using the other |
+| `make vm-helm` | `vagrant rsync`, installs Helm in the VM if needed, then `helm upgrade --install` of the chart against that Secret |
 | `make vm-restart` | Restarts controller + node plugin (needed after every `vm-load`: the `:dev` tag never triggers a rollout by itself) |
 | `make vm-ssh` | `vagrant ssh` |
 | `make vm-destroy` | `vagrant destroy -f` (the box stays cached) |
@@ -187,7 +186,7 @@ k3s doesn't pull from your local Docker daemon; the image is shipped over SSH in
 make image          # optionally RETYC_VERSION=vX.Y.Z
 make vm-load        # docker save | k3s ctr images import
 make vm-secret      # retyc-csi-credentials from $RETYC_TOKEN / $RETYC_KEY_PASSPHRASE
-make vm-deploy      # rsync + kubectl apply deploy/*.yaml in the VM
+make vm-helm        # rsync + helm upgrade --install in the VM
 
 vagrant ssh -c "kubectl -n kube-system get pods -l 'app in (retyc-csi-controller, retyc-csi-node)' -w"
 ```
@@ -217,7 +216,7 @@ Iterating on the driver (or picking up a new `retyc-cli` image) is `make image v
 In the VM:
 
 ```sh
-kubectl apply -f /vagrant/deploy/examples/rwx-test.yaml
+kubectl apply -f /vagrant/examples/rwx-test.yaml
 kubectl get pvc retyc-rwx-test -w                 # Pending → Bound (a dataroom was created)
 kubectl get pods retyc-writer retyc-reader -w      # both Running
 kubectl logs -f retyc-reader                       # lines written by the writer show up every 5s
@@ -248,7 +247,7 @@ In the VM:
 # Node plugin restart: the FUSE daemons die with the container (documented limitation).
 kubectl -n kube-system delete pod -l app=retyc-csi-node
 kubectl exec retyc-writer -- ls /data               # expect "Transport endpoint is not connected"
-kubectl delete pod retyc-writer retyc-reader && kubectl apply -f /vagrant/deploy/examples/rwx-test.yaml   # remount recovers
+kubectl delete pod retyc-writer retyc-reader && kubectl apply -f /vagrant/examples/rwx-test.yaml   # remount recovers
 
 # Bad credentials: `retyc webdav serve` exits within a second ("key passphrase check failed:
 # wrong key passphrase") and is restarted every 5s; the node pod goes 1/2 with that message on
@@ -266,7 +265,7 @@ Same claim against the `retyc-rwx-retain` class: deleting the PVC must leave bot
 (`Released`) and the dataroom behind, and a static PV must bring the data back. In the VM:
 
 ```sh
-sed 's/storageClassName: retyc-rwx$/storageClassName: retyc-rwx-retain/' /vagrant/deploy/examples/rwx-test.yaml | kubectl apply -f -
+sed 's/storageClassName: retyc-rwx$/storageClassName: retyc-rwx-retain/' /vagrant/examples/rwx-test.yaml | kubectl apply -f -
 kubectl wait --for=condition=Ready pod/retyc-writer --timeout=120s
 id=$(kubectl get pv -o jsonpath='{.items[?(@.spec.claimRef.name=="retyc-rwx-test")].spec.csi.volumeHandle}')
 title=$(kubectl get pv -o jsonpath='{.items[?(@.spec.claimRef.name=="retyc-rwx-test")].spec.csi.volumeAttributes.title}')
@@ -276,7 +275,7 @@ kubectl get pv                                        # STATUS Released, RECLAIM
 retyc --json dataroom ls | grep -c "$title"           # (host) 1 — DeleteVolume was never called
 kubectl delete pv "$title"                            # the dataroom still exists afterwards
 
-sed "s/REPLACE-WITH-DATAROOM-ID.*/$id/; s/REPLACE-WITH-DATAROOM-TITLE.*/$title/" /vagrant/deploy/examples/static-pv.yaml | kubectl apply -f -
+sed "s/REPLACE-WITH-DATAROOM-ID.*/$id/; s/REPLACE-WITH-DATAROOM-TITLE.*/$title/" /vagrant/examples/static-pv.yaml | kubectl apply -f -
 kubectl get pvc retyc-adopted                         # Bound, no new dataroom created
 kubectl run adopted --image=busybox:1.36 --restart=Never --overrides='{"spec":{"containers":[{"name":"c","image":"busybox:1.36","command":["cat","/data/log.txt"],"volumeMounts":[{"name":"d","mountPath":"/data"}]}],"volumes":[{"name":"d","persistentVolumeClaim":{"claimName":"retyc-adopted"}}]}}'
 kubectl logs adopted                                  # the writer's lines are back
@@ -293,7 +292,7 @@ the VM:
 
 ```sh
 # Namespace, PVC and pod from the example, then a real Secret copied from the driver's:
-awk 'BEGIN{RS="---\n"; ORS="---\n"} NR!=2' /vagrant/deploy/examples/tenant.yaml.example | kubectl apply -f -
+awk 'BEGIN{RS="---\n"; ORS="---\n"} NR!=2' /vagrant/examples/tenant.yaml.example | kubectl apply -f -
 kubectl get secret -n kube-system retyc-csi-credentials -o json \
   | jq '{apiVersion, kind, type, metadata:{name:"retyc-credentials", namespace:"team-a"}, data}' | kubectl apply -f -
 kubectl -n team-a wait --for=condition=Ready pod/team-writer --timeout=180s
@@ -310,7 +309,7 @@ kubectl -n kube-system logs ds/retyc-csi-node -c retyc-csi-node | grep 'stopping
 ### 4.6 Teardown — and verify the dataroom is gone
 
 ```sh
-vagrant ssh -c "kubectl delete -f /vagrant/deploy/examples/rwx-test.yaml"
+vagrant ssh -c "kubectl delete -f /vagrant/examples/rwx-test.yaml"
 vagrant ssh -c "kubectl get pv"               # released PV disappears (reclaimPolicy: Delete)
 retyc --json dataroom ls | grep -c '"pvc-'    # 0 — DeleteVolume actually removed the dataroom
 retyc --json user quota                       # count_dataroom back to where it started

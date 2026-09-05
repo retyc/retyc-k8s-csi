@@ -79,8 +79,8 @@ existed and skipped creating it. The `Dockerfile` installs the two packages in s
 
 ## PV stays `Released` with `Delete` policy, provisioner logs `cannot patch resource "persistentvolumes"`
 
-The provisioner's ClusterRole lacks `patch` on `persistentvolumes`, which it needs to remove its finalizer. Apply the
-current `deploy/rbac.yaml`.
+The provisioner's ClusterRole lacks `patch` on `persistentvolumes`, which it needs to remove its finalizer. Upgrade to
+the current chart (`rbac.create: true`), or add the verb to your own ClusterRole.
 
 ## Writes from one node take long to appear on another
 

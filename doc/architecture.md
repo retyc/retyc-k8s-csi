@@ -51,7 +51,7 @@ never mix between accounts.
    node has left. A stale mount (`ENOTCONN` after a plugin restart) is cleaned up here.
 5. **Deletion.** With `reclaimPolicy: Delete`, deleting the PVC makes the provisioner call `DeleteVolume`, i.e.
    `retyc dataroom rm retyc://<id> -y`. A dataroom already gone is treated as success. With `Retain`, the PV is
-   released and the dataroom kept; `deploy/examples/static-pv.yaml` shows how to adopt it again.
+   released and the dataroom kept; `examples/static-pv.yaml` shows how to adopt it again.
 
 ## The WebDAV path
 

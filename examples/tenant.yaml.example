@@ -1,6 +1,6 @@
 # A namespace bringing its own Retyc account. Copy, fill in the Secret, apply: the claim is
 # provisioned in *that* account, and mounted with it, through the retyc-rwx-tenant class. The
-# Secret's name is fixed by the StorageClass parameters (deploy/storageclass.yaml).
+# Secret's name is fixed by the StorageClass parameters (the chart's storageClasses value).
 apiVersion: v1
 kind: Namespace
 metadata:

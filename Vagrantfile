@@ -11,10 +11,10 @@ Vagrant.configure("2") do |config|
   config.vm.box = "debian/trixie64"
   config.vm.hostname = "retyc-csi"
 
-  # rsync, not NFS/9p: host→guest one-way is all we need (the deploy/ manifests), and it
+  # rsync, not NFS/9p: host→guest one-way is all we need (the chart and the examples), and it
   # needs neither an NFS server nor sudo on the host. Re-run `vagrant rsync` after editing.
   config.vm.synced_folder ".", "/vagrant", type: "rsync",
-    rsync__exclude: [".git/", ".vagrant/", "retyc-k8s-csi", "dist/", "deploy/secret.yaml"]
+    rsync__exclude: [".git/", ".vagrant/", "retyc-k8s-csi", "dist/"]
 
   config.vm.provider :libvirt do |lv|
     lv.driver = "kvm"

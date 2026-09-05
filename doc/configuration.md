@@ -1,7 +1,7 @@
 # Configuration
 
-Everything below is exposed by the Helm chart (`charts/retyc-csi`, values in its
-[README](../charts/retyc-csi/README.md)) and set by hand in the raw manifests under `deploy/`.
+Everything below is exposed by the Helm chart (`charts/retyc-csi`); the value names are in its
+[README](../charts/retyc-csi/README.md).
 
 ## Driver flags
 
@@ -36,13 +36,10 @@ skips the `auth status` check.
 
 ## The Secret
 
-```sh
-cp deploy/secret.yaml.example deploy/secret.yaml
-$EDITOR deploy/secret.yaml
-kubectl apply -f deploy/secret.yaml
-```
-
-The Secret is read at pod start. After changing it, restart both components:
+The chart creates it from `credentials.token` and `credentials.keyPassphrase`, or uses the one named by
+`credentials.existingSecret` (keys `RETYC_TOKEN` and `RETYC_KEY_PASSPHRASE`). A chart-managed Secret that changes
+rolls both components automatically (checksum annotation). With an existing Secret, the pods read it at start, so
+after changing it restart both components:
 
 ```sh
 kubectl -n kube-system rollout restart deploy/retyc-csi-controller ds/retyc-csi-node
@@ -54,7 +51,7 @@ the new one does not become Ready.
 
 ## StorageClasses
 
-`deploy/storageclass.yaml` ships three classes.
+The chart ships three classes (`storageClasses` value).
 
 | Name | Identity | `reclaimPolicy` | `volumeBindingMode` |
 |------|----------|-----------------|---------------------|
@@ -93,7 +90,7 @@ What to know before rolling it out:
   scrypt peak). Adjust the DaemonSet limit accordingly.
 
 Example, with a namespace, its Secret, a claim and a pod:
-[`deploy/examples/tenant.yaml.example`](../deploy/examples/tenant.yaml.example).
+[`examples/tenant.yaml.example`](../examples/tenant.yaml.example).
 
 ## Adopting an existing dataroom
 
@@ -104,7 +101,7 @@ volume through a static PV whose `volumeHandle` is the dataroom ID and whose `ti
 retyc --json dataroom ls          # id + title
 ```
 
-Then fill in and apply [`deploy/examples/static-pv.yaml`](../deploy/examples/static-pv.yaml). Use `Retain` on a static
+Then fill in and apply [`examples/static-pv.yaml`](../examples/static-pv.yaml). Use `Retain` on a static
 PV: the provisioner never deletes volumes it did not create.
 
 ## Probes and resources

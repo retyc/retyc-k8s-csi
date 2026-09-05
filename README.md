@@ -80,14 +80,12 @@ the `CSIDriver`, RBAC, the controller `Deployment`, the node `DaemonSet` and the
 driver serves per-namespace identities only. Every value is documented in
 [charts/retyc-csi/README.md](charts/retyc-csi/README.md).
 
-### With plain manifests
+### Without Helm
 
-`deploy/` holds the same resources as raw YAML, used by the development loop:
+`helm template` renders the same resources as plain YAML for GitOps pipelines or a `kubectl apply`:
 
 ```sh
-cp deploy/secret.yaml.example deploy/secret.yaml     # RETYC_TOKEN + RETYC_KEY_PASSPHRASE
-kubectl apply -f deploy/secret.yaml
-make deploy
+helm template retyc-csi ./charts/retyc-csi -n kube-system --set credentials.existingSecret=retyc-csi-credentials
 ```
 
 ### Container image
@@ -126,15 +124,15 @@ Every pod mounting `shared-data` - on any node - reads and writes the same datar
 | `retyc-rwx-tenant` | the namespace's own `retyc-credentials`   | `Retain`      | keeps the dataroom, in the namespace's account            |
 
 An existing dataroom - retained or created by hand - can be adopted as a static volume: see
-[deploy/examples/static-pv.yaml](deploy/examples/static-pv.yaml). A complete writer/reader example lives in
-[deploy/examples/rwx-test.yaml](deploy/examples/rwx-test.yaml).
+[examples/static-pv.yaml](examples/static-pv.yaml). A complete writer/reader example lives in
+[examples/rwx-test.yaml](examples/rwx-test.yaml).
 
 ### Multi-tenant
 
 With `retyc-rwx-tenant`, each namespace brings its own Retyc account: a Secret named `retyc-credentials` in the
 namespace, holding `RETYC_TOKEN` and `RETYC_KEY_PASSPHRASE`. Datarooms are created in that account and mounted with
 it, by a dedicated WebDAV server on each node. The driver's own Secret is optional in that setup. Example:
-[deploy/examples/tenant.yaml.example](deploy/examples/tenant.yaml.example).
+[examples/tenant.yaml.example](examples/tenant.yaml.example).
 
 ---
 
@@ -218,7 +216,7 @@ make helm-lint    # chart lint + render in every credential mode
 make image        # container image
 
 # Full end-to-end environment: single-node k3s on Debian trixie, Vagrant + libvirt
-make vm-up        # boot + provision, then: make image vm-load vm-secret vm-deploy
+make vm-up        # boot + provision, then: make image vm-load vm-secret vm-helm
 ```
 
 CI (GitHub Actions) runs lint, tests with the race detector, `govulncheck`, the chart lint with `kubeconform`

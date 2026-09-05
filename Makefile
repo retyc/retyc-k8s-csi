@@ -6,12 +6,11 @@ VERSION      ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo
 REVISION     := $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
 CREATED      := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS      := -s -w -X $(MODULE)/internal/driver.DriverVersion=$(VERSION)
-MANIFESTS    := deploy/csidriver.yaml deploy/rbac.yaml deploy/csi-controller.yaml deploy/csi-node-daemonset.yaml deploy/storageclass.yaml
 
 CHART        := charts/retyc-csi
 
 .PHONY: build test vet lint clean image deploy helm-lint helm-template helm-package \
-	vm-up vm-retyc vm-load vm-secret vm-deploy vm-helm vm-restart vm-ssh vm-destroy
+	vm-up vm-retyc vm-load vm-secret vm-helm vm-restart vm-ssh vm-destroy
 
 ## Build the driver binary (both controller and node modes)
 build:
@@ -42,11 +41,13 @@ image:
 	  --build-arg VERSION=$(VERSION) --build-arg REVISION=$(REVISION) --build-arg CREATED=$(CREATED) \
 	  -t $(IMAGE) .
 
-## Apply every manifest under deploy/ (StorageClass, RBAC, Controller, DaemonSet) —
-## deploy/secret.yaml.example is intentionally excluded: copy it, fill in real
-## credentials, and apply it yourself.
+## Install or upgrade the chart on the current kubectl context, with the cluster-wide identity
+## taken from RETYC_TOKEN / RETYC_KEY_PASSPHRASE in the environment (see charts/retyc-csi/README.md
+## for existingSecret and tenant-only setups).
 deploy:
-	kubectl apply $(addprefix -f ,$(MANIFESTS))
+	@test -n "$$RETYC_TOKEN" && test -n "$$RETYC_KEY_PASSPHRASE" || { echo "export RETYC_TOKEN and RETYC_KEY_PASSPHRASE first"; exit 1; }
+	helm upgrade --install retyc-csi $(CHART) -n kube-system \
+	  --set credentials.token="$$RETYC_TOKEN" --set credentials.keyPassphrase="$$RETYC_KEY_PASSPHRASE"
 
 ## Lint the Helm chart (values schema included) and render it in its three credential modes.
 helm-lint:
@@ -91,13 +92,8 @@ vm-secret:
 	@printf 'RETYC_TOKEN=%s\nRETYC_KEY_PASSPHRASE=%s\n' "$$RETYC_TOKEN" "$$RETYC_KEY_PASSPHRASE" | \
 	  vagrant ssh -c "kubectl -n kube-system create secret generic retyc-csi-credentials --from-env-file=/dev/stdin --dry-run=client -o yaml | kubectl apply -f -"
 
-## Sync deploy/ into the VM and apply the driver manifests there (same set as `make deploy`).
-vm-deploy:
-	vagrant rsync
-	vagrant ssh -c "kubectl apply $(addprefix -f /vagrant/,$(MANIFESTS))"
-
-## Install or upgrade the chart in the VM against the Secret created by vm-secret. Mutually
-## exclusive with vm-deploy (same resource names): delete the raw manifests first, or vice versa.
+## Install or upgrade the chart in the VM against the Secret created by vm-secret (Helm itself is
+## installed in the VM on first use). Typical loop: make image vm-load vm-helm vm-restart
 vm-helm:
 	vagrant rsync
 	vagrant ssh -c "command -v helm >/dev/null || curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | sudo bash"
