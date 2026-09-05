@@ -9,7 +9,7 @@ LDFLAGS      := -s -w -X $(MODULE)/internal/driver.DriverVersion=$(VERSION)
 
 CHART        := charts/retyc-csi
 
-.PHONY: build test vet lint clean image deploy helm-lint helm-template helm-package \
+.PHONY: build test vet lint clean image helm-lint helm-template helm-package \
 	vm-up vm-retyc vm-load vm-secret vm-helm vm-restart vm-ssh vm-destroy
 
 ## Build the driver binary (both controller and node modes)
@@ -41,14 +41,6 @@ image:
 	  --build-arg VERSION=$(VERSION) --build-arg REVISION=$(REVISION) --build-arg CREATED=$(CREATED) \
 	  -t $(IMAGE) .
 
-## Install or upgrade the chart on the current kubectl context, with the cluster-wide identity
-## taken from RETYC_TOKEN / RETYC_KEY_PASSPHRASE in the environment (see charts/retyc-csi/README.md
-## for existingSecret and tenant-only setups).
-deploy:
-	@test -n "$$RETYC_TOKEN" && test -n "$$RETYC_KEY_PASSPHRASE" || { echo "export RETYC_TOKEN and RETYC_KEY_PASSPHRASE first"; exit 1; }
-	helm upgrade --install retyc-csi $(CHART) -n kube-system \
-	  --set credentials.token="$$RETYC_TOKEN" --set credentials.keyPassphrase="$$RETYC_KEY_PASSPHRASE"
-
 ## Lint the Helm chart (values schema included) and render it in its three credential modes.
 helm-lint:
 	helm lint $(CHART)
@@ -66,8 +58,8 @@ helm-package:
 
 ## ---------------------------------------------------------------------------------------------
 ## Test VM: single-node k3s on Debian trixie under Vagrant + libvirt (Vagrantfile, doc/testing.md).
-## Every vm-* target runs from the host; `vagrant ssh -c` opens a login shell, so kubectl works
-## without sudo inside (KUBECONFIG is set by /etc/profile.d/k3s.sh).
+## Nothing in this Makefile talks to a cluster from the host: every vm-* target goes through
+## `vagrant ssh -c`, a login shell in the VM where kubectl and helm work without sudo.
 
 ## Boot + provision the VM (first run: box download + k3s install, a few minutes), then ship the
 ## host's `retyc` CLI into it.
@@ -92,11 +84,10 @@ vm-secret:
 	@printf 'RETYC_TOKEN=%s\nRETYC_KEY_PASSPHRASE=%s\n' "$$RETYC_TOKEN" "$$RETYC_KEY_PASSPHRASE" | \
 	  vagrant ssh -c "kubectl -n kube-system create secret generic retyc-csi-credentials --from-env-file=/dev/stdin --dry-run=client -o yaml | kubectl apply -f -"
 
-## Install or upgrade the chart in the VM against the Secret created by vm-secret (Helm itself is
-## installed in the VM on first use). Typical loop: make image vm-load vm-helm vm-restart
+## Install or upgrade the chart in the VM against the Secret created by vm-secret (Helm is
+## provisioned with the VM). Typical loop: make image vm-load vm-helm vm-restart
 vm-helm:
 	vagrant rsync
-	vagrant ssh -c "command -v helm >/dev/null || curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | sudo bash"
 	vagrant ssh -c "helm upgrade --install retyc-csi /vagrant/$(CHART) -n kube-system --set image.tag=dev --set credentials.existingSecret=retyc-csi-credentials --wait --timeout 5m"
 
 ## Restart controller + node plugin so they pick up a freshly loaded :dev image (IfNotPresent +

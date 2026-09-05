@@ -48,5 +48,12 @@ Vagrant.configure("2") do |config|
 
     until k3s kubectl wait --for=condition=Ready node --all --timeout=10s >/dev/null 2>&1; do sleep 2; done
     k3s kubectl get nodes
+
+    # Helm, the way the driver is deployed (make vm-helm). Debian has no package; the official
+    # installer verifies the release checksum before installing to /usr/local/bin.
+    if ! command -v helm >/dev/null 2>&1; then
+      curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+    fi
+    helm version --short
   SHELL
 end

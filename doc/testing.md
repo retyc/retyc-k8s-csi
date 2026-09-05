@@ -53,14 +53,15 @@ make vm-ssh       # a shell inside; kubectl works without sudo there
 | `make vm-retyc` | Copies the host's `retyc` into the VM (`RETYC_BIN=…` to pick another) |
 | `make vm-load` | `docker save` the driver image into k3s' containerd |
 | `make vm-secret` | Creates the `retyc-csi-credentials` Secret from `RETYC_TOKEN`/`RETYC_KEY_PASSPHRASE` |
-| `make vm-helm` | `vagrant rsync`, installs Helm in the VM if needed, then `helm upgrade --install` of the chart against that Secret |
+| `make vm-helm` | `vagrant rsync` + `helm upgrade --install` of the chart in the VM against that Secret |
 | `make vm-restart` | Restarts controller + node plugin (needed after every `vm-load`: the `:dev` tag never triggers a rollout by itself) |
 | `make vm-ssh` | `vagrant ssh` |
 | `make vm-destroy` | `vagrant destroy -f` (the box stays cached) |
 
 The VM has 2 vCPUs, 4 GB RAM, NAT to the internet (it must reach `api.retyc.com`), `davfs2`
-pre-configured like the container image (`/etc/davfs2/davfs2.conf`), and k3s with traefik
-disabled. The repo is rsynced one-way to `/vagrant` (`vagrant rsync` to refresh it after edits).
+pre-configured like the container image (`/etc/davfs2/davfs2.conf`), k3s with traefik disabled,
+and Helm. Nothing in the Makefile touches a cluster from the host: every `vm-*` target runs its
+`kubectl`/`helm` inside the VM over `vagrant ssh`. The repo is rsynced one-way to `/vagrant` (`vagrant rsync` to refresh it after edits).
 Anything stateful you want to keep across `vagrant destroy` belongs on the host. The
 `[fog][WARNING] Unrecognized arguments: libvirt_ip_command` line every vagrant command prints is
 vagrant-libvirt 0.12.x noise, not an error.
