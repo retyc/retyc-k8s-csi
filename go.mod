@@ -3,7 +3,7 @@ module github.com/retyc/retyc-k8s-csi
 go 1.26.0
 
 require (
-	github.com/container-storage-interface/spec v1.11.0
+	github.com/container-storage-interface/spec v1.13.0
 	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.12
 	k8s.io/klog/v2 v2.140.0
