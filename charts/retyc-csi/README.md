@@ -45,14 +45,14 @@ DaemonSet rolls one node at a time; plan upgrades like node drains.
 | `probes.liveness` / `probes.readiness` | see values | Probe timings, shared by both components |
 | `controller.replicas` | `1` | Add `--leader-election` to `controller.provisioner.extraArgs` for more |
 | `controller.resources` | 64Mi / 512Mi | Driver container resources |
-| `controller.provisioner.image.*` | `csi-provisioner:v5.1.0` | Sidecar image |
+| `controller.provisioner.image.*` | `csi-provisioner:v6.3.0` | Sidecar image |
 | `controller.provisioner.extraArgs` | `[]` | |
 | `controller.{podAnnotations,podLabels,nodeSelector,tolerations,affinity,priorityClassName}` | | Scheduling |
 | `node.kubeletDir` | `/var/lib/kubelet` | Kubelet root on the nodes |
 | `node.webdavPort` | `8888` | First loopback port of the `retyc webdav serve` servers |
 | `node.stateDir` | `/var/lib/retyc-csi` | Per-identity state inside the container |
 | `node.resources` | 64Mi / 512Mi | Keep the limit above ~350 MiB per identity (scrypt peak) |
-| `node.registrar.image.*` | `csi-node-driver-registrar:v2.12.0` | Sidecar image |
+| `node.registrar.image.*` | `csi-node-driver-registrar:v2.17.0` | Sidecar image |
 | `node.updateStrategy` | `RollingUpdate`, `maxUnavailable: 1` | One node at a time |
 | `node.{podAnnotations,podLabels,nodeSelector,tolerations,affinity,priorityClassName}` | tolerate all | Scheduling |
 

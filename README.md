@@ -53,7 +53,7 @@ team ships, embedded from the official `retyc/retyc-cli` image. Full walkthrough
 
 ## Requirements
 
-- Kubernetes 1.25+ with a kubelet that allows privileged pods and `mountPropagation: Bidirectional` on the nodes
+- Kubernetes 1.34+ (required by csi-provisioner v6) with a kubelet that allows privileged pods and `mountPropagation: Bidirectional` on the nodes
 - `/dev/fuse` on every node (davfs2 is a FUSE filesystem)
 - A Retyc account, an offline token (`retyc auth login --offline`) and the passphrase of its AGE key
 - Outbound HTTPS from the nodes to `api.retyc.com`

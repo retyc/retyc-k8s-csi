@@ -4,7 +4,7 @@ description: Kubernetes CSI driver for Retyc datarooms - ReadWriteMany volumes w
 type: application
 version: 0.1.0
 appVersion: "v0.1.0"
-kubeVersion: ">=1.25.0-0"
+kubeVersion: ">=1.34.0-0"
 home: https://retyc.com
 sources:
   - https://github.com/retyc/retyc-k8s-csi

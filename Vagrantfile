@@ -52,7 +52,7 @@ Vagrant.configure("2") do |config|
     # Helm, the way the driver is deployed (make vm-helm). Debian has no package; the official
     # installer verifies the release checksum before installing to /usr/local/bin.
     if ! command -v helm >/dev/null 2>&1; then
-      curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-4 | bash
     fi
     helm version --short
   SHELL
