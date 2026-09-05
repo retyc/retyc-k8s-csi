@@ -93,8 +93,8 @@ helm template retyc-csi ./charts/retyc-csi -n kube-system --set credentials.exis
 The image bundles the driver, `davfs2` and the `retyc` CLI. Build and push it to your registry:
 
 ```sh
-make image                              # retyc/retyc-k8s-csi:dev
-make image RETYC_VERSION=v1.2.0         # pin the embedded retyc-cli release
+make image                              # retyc/retyc-k8s-csi:dev, retyc-cli version pinned in the Dockerfile
+make image RETYC_CLI_VERSION=v1.3.0     # one-off build against another retyc-cli release
 ```
 
 ---

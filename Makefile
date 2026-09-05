@@ -1,7 +1,6 @@
 MODULE       := github.com/retyc/retyc-k8s-csi
 BINARY       := retyc-k8s-csi
 IMAGE        ?= retyc/retyc-k8s-csi:dev
-RETYC_VERSION ?= latest
 VERSION      ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 REVISION     := $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
 CREATED      := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -33,11 +32,12 @@ clean:
 	rm -f $(BINARY)
 
 ## Build the container image (controller + node share one image, see main.go --mode), with OCI
-## provenance labels from git. Override the embedded retyc-cli version with e.g.
-## `make image RETYC_VERSION=v0.3.0`, the image version with `VERSION=v1.0.0`.
+## provenance labels from git. The embedded retyc-cli version is pinned in the Dockerfile;
+## `make image RETYC_CLI_VERSION=v1.3.0` overrides it for a one-off build, `VERSION=v1.0.0` the
+## image version.
 image:
 	docker build --pull \
-	  --build-arg RETYC_VERSION=$(RETYC_VERSION) \
+	  $(if $(RETYC_CLI_VERSION),--build-arg RETYC_CLI_VERSION=$(RETYC_CLI_VERSION)) \
 	  --build-arg VERSION=$(VERSION) --build-arg REVISION=$(REVISION) --build-arg CREATED=$(CREATED) \
 	  -t $(IMAGE) .
 

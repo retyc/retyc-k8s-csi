@@ -119,10 +119,12 @@ Resources default to a 64 MiB request and a 512 MiB limit per driver container. 
 
 ## Image
 
-`RETYC_VERSION` pins the `retyc/retyc-cli` image tag embedded at build time:
+The `retyc/retyc-cli` release embedded in the image is pinned by `ARG RETYC_CLI_VERSION` in the `Dockerfile`, the
+single place to bump it (Dependabot's `docker` ecosystem proposes the updates). For a one-off build against another
+release:
 
 ```sh
-make image RETYC_VERSION=v1.2.0
+make image RETYC_CLI_VERSION=v1.3.0
 ```
 
 The image is based on `debian:trixie-slim` with `davfs2`, `libnss-unknown`, CA certificates and the `/etc/mtab`

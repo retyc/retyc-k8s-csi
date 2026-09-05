@@ -184,7 +184,7 @@ k3s doesn't pull from your local Docker daemon; the image is shipped over SSH in
 (the `:dev` tag gives `imagePullPolicy: IfNotPresent`, so no registry is involved).
 
 ```sh
-make image          # optionally RETYC_VERSION=vX.Y.Z
+make image          # optionally RETYC_CLI_VERSION=vX.Y.Z
 make vm-load        # docker save | k3s ctr images import
 make vm-secret      # retyc-csi-credentials from $RETYC_TOKEN / $RETYC_KEY_PASSPHRASE
 make vm-helm        # rsync + helm upgrade --install in the VM

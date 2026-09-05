@@ -1,5 +1,7 @@
-# RETYC_VERSION pins the retyc-cli image tag to embed (e.g. "v0.3.0"); defaults to latest.
-ARG RETYC_VERSION=latest
+# The retyc-cli release embedded in the image — the single source of truth for that version.
+# Bump it here (Dependabot proposes it); `make image RETYC_CLI_VERSION=...` overrides for a
+# one-off build.
+ARG RETYC_CLI_VERSION=v1.2.0-rc1
 # Build provenance, set by `make image` (git describe / rev-parse / date -u); also reported by the
 # driver's GetPluginInfo through ldflags.
 ARG VERSION=dev
@@ -21,10 +23,10 @@ RUN CGO_ENABLED=0 go build -trimpath \
 # Reuse the officially published retyc-cli image instead of vendoring/rebuilding the binary —
 # dataroom creation and WebDAV serving are security-sensitive (AGE crypto) and should always run
 # the same vetted build the CLI team ships.
-FROM retyc/retyc-cli:${RETYC_VERSION} AS retyc
+FROM retyc/retyc-cli:${RETYC_CLI_VERSION} AS retyc
 
 FROM debian:trixie-slim
-ARG RETYC_VERSION
+ARG RETYC_CLI_VERSION
 ARG VERSION
 ARG REVISION
 ARG CREATED
@@ -40,7 +42,7 @@ LABEL org.opencontainers.image.title="Retyc CSI Driver" \
       org.opencontainers.image.revision="${REVISION}" \
       org.opencontainers.image.created="${CREATED}" \
       org.opencontainers.image.base.name="docker.io/library/debian:trixie-slim" \
-      com.retyc.cli.version="${RETYC_VERSION}"
+      com.retyc.cli.version="${RETYC_CLI_VERSION}"
 
 # libnss-unknown: davfs2 enforces permissions itself (the kernel is told allow_other without
 # default_permissions) and, for any uid that is neither 0 nor the mount owner, its check starts
