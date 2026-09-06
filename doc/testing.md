@@ -293,7 +293,7 @@ the VM:
 
 ```sh
 # Namespace, PVC and pod from the example, then a real Secret copied from the driver's:
-awk 'BEGIN{RS="---\n"; ORS="---\n"} NR!=2' /vagrant/examples/tenant.yaml.example | kubectl apply -f -
+awk 'BEGIN{RS="---\n"; ORS="---\n"} NR!=2' /vagrant/examples/tenant.yaml | kubectl apply -f -
 kubectl get secret -n kube-system retyc-csi-credentials -o json \
   | jq '{apiVersion, kind, type, metadata:{name:"retyc-credentials", namespace:"team-a"}, data}' | kubectl apply -f -
 kubectl -n team-a wait --for=condition=Ready pod/team-writer --timeout=180s

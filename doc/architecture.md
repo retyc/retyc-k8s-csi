@@ -4,6 +4,30 @@
 attach/detach step, no block devices, one shared filesystem per volume mounted on every node that needs it. The
 filesystem is a Retyc dataroom, reached through the WebDAV server built into `retyc-cli` and mounted with `davfs2`.
 
+## Overview
+
+```
+   PersistentVolumeClaim                                 Pod
+          │                                               │ /data
+          ▼                                               ▼
+  ┌─ controller ──────────┐              ┌─ node plugin (DaemonSet) ────────────────────┐
+  │ csi-provisioner       │              │ node-driver-registrar                        │
+  │ retyc-k8s-csi         │              │ retyc-k8s-csi ── mount -t davfs ──▶ davfs2   │
+  │   └─ retyc dataroom   │              │   └─ retyc webdav serve ◀── loopback ────┘   │
+  │      create / rm      │              └──────────────┬───────────────────────────────┘
+  └──────────┬────────────┘                             │  encrypted chunks
+             ▼                                          ▼
+                              Retyc API
+```
+
+- **Controller** (`--mode=controller`, one replica): creates a dataroom per `CreateVolume`, deletes it on `DeleteVolume`.
+- **Node plugin** (`--mode=node`, one per node): supervises a local `retyc webdav serve`, mounts each dataroom with
+  `davfs2` on a per-volume staging path, then bind-mounts it into every pod that uses the claim.
+- **Sidecars**: the standard `csi-provisioner` and `csi-node-driver-registrar` from kubernetes-csi.
+
+The driver never speaks to the Retyc API itself: every operation goes through the same vetted `retyc` binary the CLI
+team ships, embedded from the official `ghcr.io/retyc/retyc-cli` image.
+
 ## Components
 
 | Component | Where | Role |
@@ -114,3 +138,28 @@ tenant identities expected per node.
 | Tenant Secret deleted before its claims | `DeleteVolume` cannot authenticate (with a `Delete` class); `Retain` classes are unaffected | recreate the Secret, or delete the PV by hand |
 | Volume mounted within 60 s of its creation | `mount.davfs` gets `404 Not Found` while the server's dataroom-title cache is stale | automatic, kubelet retries until the cache expires |
 | Retyc API unreachable | `CreateVolume`/`DeleteVolume` fail and are retried by the provisioner; reads of uncached files fail | automatic |
+
+## Security
+
+- **Encryption**: files and metadata are encrypted on the node with [AGE](https://github.com/FiloSottile/age)
+  post-quantum hybrid keys by `retyc-cli`, before anything leaves the node. Retyc servers only ever see ciphertext.
+- **Identity**: a Retyc account per cluster (the driver's `Secret`) or per namespace (`retyc-rwx-tenant`, resolved by
+  kubelet and the provisioner from the claim's namespace). Tokens and passphrases only ever live in those Secrets and in
+  the environment of the `retyc` processes; each identity's WebDAV server runs with its own state directory.
+- **Trust boundary**: the WebDAV server listens on loopback inside the node plugin's own network namespace, and only the
+  `davfs2` mount in that same container talks to it. It is unreachable from pods and from the node.
+- **Pod access**: mounts are world-writable (`dir_mode=0777,file_mode=0666`) so that non-root pods can write - Kubernetes
+  `fsGroup` cannot be applied to a FUSE mount. Isolation between workloads is therefore at the claim level, not the
+  file level: one dataroom per team or application, not per user.
+
+## Limitations
+
+- **No resize, no snapshots, no capacity enforcement.** Requested sizes are accepted and echoed back; Retyc does not cap
+  a dataroom's size.
+- **A node plugin restart breaks the mounts on that node.** The FUSE daemons live in the plugin container. Pods see
+  `Transport endpoint is not connected` until they are rescheduled; the driver cleans the stale mounts up on the next
+  stage/unstage. Plan node plugin upgrades like a node drain.
+- **File modes are set at creation.** `dir_mode`/`file_mode` apply to entries discovered on the server; a file created
+  through the mount keeps the mode derived from the creating pod's umask until the plugin's metadata cache is rebuilt.
+- **`CreateVolume` idempotency checks the first page of `retyc dataroom ls` only.** A retried create past that page can
+  produce a duplicate dataroom; the driver logs a warning when it becomes possible.

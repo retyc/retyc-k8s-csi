@@ -9,228 +9,88 @@
 
 # Retyc CSI Driver
 
-> Kubernetes CSI driver for [Retyc](https://retyc.com) datarooms - `ReadWriteMany` persistent volumes with end-to-end
-> post-quantum encryption, shared between pods and nodes, with the data staying in Europe.
+**Retyc CSI driver** is a CSI driver that uses your [Retyc](https://retyc.com) account to support dynamic
+provisioning of `ReadWriteMany` Kubernetes Persistent Volumes via Persistent Volume Claims. Each Persistent Volume is
+a Retyc dataroom, named after the volume, encrypted end to end on the node before anything reaches the Retyc servers.
 
----
+## How to deploy Retyc CSI driver to your cluster
 
-## What is Retyc?
+You need a Retyc account and the [`retyc` CLI](https://github.com/retyc/retyc-cli). The driver uses two credentials:
 
-[Retyc](https://retyc.com) is a European sovereign file-sharing platform with end-to-end post-quantum encryption. Data
-stays in Europe, GDPR-compliant by design.
+- a token, printed once by `retyc auth login --offline`;
+- the passphrase of your Retyc key, the one the CLI asks you for.
 
-`retyc-k8s-csi` turns Retyc datarooms into Kubernetes volumes: one `PersistentVolumeClaim` is one dataroom, mounted on
-every node that needs it. Files are encrypted and decrypted on the node by the official
-[`retyc-cli`](https://github.com/retyc/retyc-cli); the Retyc servers never see plaintext.
+Your nodes must run Kubernetes 1.34 or later, allow privileged pods, have `/dev/fuse` and reach `api.retyc.com`.
 
----
+### With Helm
 
-## How it works
+Follow the instructions from the helm chart [README](charts/retyc-csi/README.md).
 
-```
-   PersistentVolumeClaim                                 Pod
-          │                                               │ /data
-          ▼                                               ▼
-  ┌─ controller ──────────┐              ┌─ node plugin (DaemonSet) ────────────────────┐
-  │ csi-provisioner       │              │ node-driver-registrar                        │
-  │ retyc-k8s-csi         │              │ retyc-k8s-csi ── mount -t davfs ──▶ davfs2   │
-  │   └─ retyc dataroom   │              │   └─ retyc webdav serve ◀── loopback ────┘   │
-  │      create / rm      │              └──────────────┬───────────────────────────────┘
-  └──────────┬────────────┘                             │  encrypted chunks
-             ▼                                          ▼
-                              Retyc API
+The tl;dr is
+
+```console
+$ helm repo add retyc https://retyc.github.io/retyc-k8s-csi/
+$ helm install retyc-csi retyc/retyc-csi --namespace kube-system \
+    --set credentials.token=<token> \
+    --set credentials.keyPassphrase=<key passphrase>
 ```
 
-- **Controller** (`--mode=controller`, one replica): creates a dataroom per `CreateVolume`, deletes it on `DeleteVolume`.
-- **Node plugin** (`--mode=node`, one per node): supervises a local `retyc webdav serve`, mounts each dataroom with
-  `davfs2` on a per-volume staging path, then bind-mounts it into every pod that uses the claim.
-- **Sidecars**: the standard `csi-provisioner` and `csi-node-driver-registrar` from kubernetes-csi.
+Both pods must be `2/2 Running`; a `1/2` means the credentials are wrong (see
+[doc/troubleshooting.md](doc/troubleshooting.md)):
 
-The driver never speaks to the Retyc API itself: every operation goes through the same vetted `retyc` binary the CLI
-team ships, embedded from the official `ghcr.io/retyc/retyc-cli` image. Full walkthrough: [doc/architecture.md](doc/architecture.md).
-
----
-
-## Requirements
-
-- Kubernetes 1.34+ (required by csi-provisioner v6) with a kubelet that allows privileged pods and `mountPropagation: Bidirectional` on the nodes
-- `/dev/fuse` on every node (davfs2 is a FUSE filesystem)
-- A Retyc account, an offline token (`retyc auth login --offline`) and the passphrase of its AGE key
-- Outbound HTTPS from the nodes to `api.retyc.com`
-
----
-
-## Installation
-
-### With Helm (recommended)
-
-```sh
-helm repo add retyc https://retyc.github.io/retyc-k8s-csi
-helm repo update
-
-read -rs RETYC_KEY_PASSPHRASE          # never on the command line history
-helm install retyc-csi retyc/retyc-csi \
-  --namespace kube-system \
-  --set credentials.token="$RETYC_TOKEN" \
-  --set credentials.keyPassphrase="$RETYC_KEY_PASSPHRASE"
-
-kubectl -n kube-system get pods -l app.kubernetes.io/instance=retyc-csi   # 2/2 Running
+```console
+$ kubectl -n kube-system get pods -l app.kubernetes.io/instance=retyc-csi
 ```
 
-The same chart is available as an OCI artifact, `helm install retyc-csi oci://ghcr.io/retyc/charts/retyc-csi`, and
-from a checkout as `./charts/retyc-csi`. Chart versions are listed on the
-[releases page](https://github.com/retyc/retyc-k8s-csi/releases); each one pins the driver image
-(`ghcr.io/retyc/retyc-k8s-csi`, mirrored on Docker Hub as `retyc/retyc-k8s-csi`) it was tested with. The chart installs
-the `CSIDriver`, RBAC, the controller `Deployment`, the node `DaemonSet` and the three StorageClasses. `credentials.existingSecret` points it at a Secret you manage yourself; without any credentials the
-driver serves per-namespace identities only. Every value is documented in
-[charts/retyc-csi/README.md](charts/retyc-csi/README.md).
+### Test your environment
 
-### Without Helm
+Deploy the test resources, a claim with a writer pod and a reader pod:
 
-`helm template` renders the same resources as plain YAML for GitOps pipelines or a `kubectl apply`:
-
-```sh
-helm template retyc-csi ./charts/retyc-csi -n kube-system --set credentials.existingSecret=retyc-csi-credentials
+```console
+$ kubectl create -f https://raw.githubusercontent.com/retyc/retyc-k8s-csi/master/examples/rwx-test.yaml
+$ kubectl logs -f retyc-reader
 ```
 
-### Container image
+The reader prints the lines the writer appends. Check `retyc dataroom ls`, or the Retyc web app: the dataroom is
+there, named after the volume.
 
-The image bundles the driver, `davfs2` and the `retyc` CLI. Build and push it to your registry:
+Delete the test resources:
 
-```sh
-make image                              # ghcr.io/retyc/retyc-k8s-csi:dev, retyc-cli pinned in the Dockerfile
-make image RETYC_CLI_VERSION=v1.3.0     # one-off build against another retyc-cli release
+```console
+$ kubectl delete -f https://raw.githubusercontent.com/retyc/retyc-k8s-csi/master/examples/rwx-test.yaml
 ```
 
----
+The dataroom is gone as well.
 
-## Quick start
+### Deploying your own PersistentVolumeClaims
 
-```yaml
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: shared-data
-spec:
-  accessModes: [ReadWriteMany]
-  storageClassName: retyc-rwx
-  resources:
-    requests:
-      storage: 1Gi
-```
+Use `accessModes: [ReadWriteMany]` and one of the storage classes:
 
-Every pod mounting `shared-data` - on any node - reads and writes the same dataroom. The dataroom appears in
-`retyc dataroom ls` and in the web app under the name of the `PersistentVolume`.
+- `retyc-rwx`: deleting the claim deletes the dataroom;
+- `retyc-rwx-retain`: deleting the claim keeps the dataroom;
+- `retyc-rwx-tenant`: same, with the credentials of a `retyc-credentials` Secret in the claim's namespace instead of
+  the cluster-wide ones (see [doc/configuration.md](doc/configuration.md#per-tenant-identities)).
 
-| StorageClass       | Identity                                  | reclaimPolicy | Deleting the PVC                                          |
-|--------------------|-------------------------------------------|---------------|-----------------------------------------------------------|
-| `retyc-rwx`        | cluster-wide (driver Secret)              | `Delete`      | deletes the dataroom                                      |
-| `retyc-rwx-retain` | cluster-wide (driver Secret)              | `Retain`      | keeps the dataroom; the PV stays `Released` until deleted |
-| `retyc-rwx-tenant` | the namespace's own `retyc-credentials`   | `Retain`      | keeps the dataroom, in the namespace's account            |
-
-An existing dataroom - retained or created by hand - can be adopted as a static volume: see
-[examples/static-pv.yaml](examples/static-pv.yaml). A complete writer/reader example lives in
-[examples/rwx-test.yaml](examples/rwx-test.yaml).
-
-### Multi-tenant
-
-With `retyc-rwx-tenant`, each namespace brings its own Retyc account: a Secret named `retyc-credentials` in the
-namespace, holding `RETYC_TOKEN` and `RETYC_KEY_PASSPHRASE`. Datarooms are created in that account and mounted with
-it, by a dedicated WebDAV server on each node. The driver's own Secret is optional in that setup. Example:
-[examples/tenant.yaml.example](examples/tenant.yaml.example).
-
----
-
-## Security
-
-- **Encryption**: files and metadata are encrypted on the node with [AGE](https://github.com/FiloSottile/age)
-  post-quantum hybrid keys by `retyc-cli`, before anything leaves the node. Retyc servers only ever see ciphertext.
-- **Identity**: a Retyc account per cluster (the driver's `Secret`) or per namespace (`retyc-rwx-tenant`, resolved by
-  kubelet and the provisioner from the claim's namespace). Tokens and passphrases only ever live in those Secrets and in
-  the environment of the `retyc` processes; each identity's WebDAV server runs with its own state directory.
-- **Trust boundary**: the WebDAV server listens on loopback inside the node plugin's own network namespace, and only the
-  `davfs2` mount in that same container talks to it. It is unreachable from pods and from the node.
-- **Pod access**: mounts are world-writable (`dir_mode=0777,file_mode=0666`) so that non-root pods can write - Kubernetes
-  `fsGroup` cannot be applied to a FUSE mount. Isolation between workloads is therefore at the claim level, not the
-  file level: one dataroom per team or application, not per user.
-
----
-
-## Consistency model
-
-Retyc datarooms are an object store with versioning, not a POSIX filesystem. A volume behaves as an
-**eventually consistent** shared filesystem:
-
-- a file written on one node is visible on the others after a few seconds (davfs2 refresh + the CLI's listing cache);
-- overwriting a file creates a new version server-side;
-- there is no cross-node locking - concurrent writers to the same file lose lines, last upload wins.
-
-This suits shared configuration, build artefacts, documents and hand-offs between jobs. It does not suit databases,
-write-ahead logs or any workload that appends to one file from several places.
-
----
-
-## Health
-
-Both modes serve `/healthz` (liveness) and `/readyz` (readiness) on `--http-endpoint` (default `:9808`), and the CSI
-`Probe` RPC reports the same readiness.
-
-- **Node**: ready when the supervised `retyc webdav serve` answers on loopback. When it does not, `/readyz` returns
-  the process state and its last output line - e.g. `key passphrase check failed` - and the same line is logged.
-- **Controller**: ready when `retyc auth status` reports an authenticated account (checked every two minutes).
-
-Liveness is deliberately lenient on the node: restarting the plugin breaks every mount on that node, so a bad
-credential shows up as a `1/2` NotReady pod, never as a restart loop. See
-[doc/troubleshooting.md](doc/troubleshooting.md).
-
----
-
-## Limitations
-
-- **No resize, no snapshots, no capacity enforcement.** Requested sizes are accepted and echoed back; Retyc does not cap
-  a dataroom's size.
-- **A node plugin restart breaks the mounts on that node.** The FUSE daemons live in the plugin container. Pods see
-  `Transport endpoint is not connected` until they are rescheduled; the driver cleans the stale mounts up on the next
-  stage/unstage. Plan node plugin upgrades like a node drain.
-- **File modes are set at creation.** `dir_mode`/`file_mode` apply to entries discovered on the server; a file created
-  through the mount keeps the mode derived from the creating pod's umask until the plugin's metadata cache is rebuilt.
-- **`CreateVolume` idempotency checks the first page of `retyc dataroom ls` only.** A retried create past that page can
-  produce a duplicate dataroom; the driver logs a warning when it becomes possible.
-
----
+Every pod mounting the claim, on any node, shares the same dataroom. It behaves like a network drive: writes made on
+one node show up on the others a few seconds later, and concurrent writes to one file are not safe. Good for
+documents, configuration and artefacts; not for databases.
 
 ## Documentation
 
-| Topic                          | Link                                             |
-|--------------------------------|--------------------------------------------------|
-| Architecture & volume lifecycle | [doc/architecture.md](doc/architecture.md)       |
-| Configuration (flags, Secret, StorageClasses, probes) | [doc/configuration.md](doc/configuration.md) |
-| Helm chart values              | [charts/retyc-csi/README.md](charts/retyc-csi/README.md) |
-| Troubleshooting                | [doc/troubleshooting.md](doc/troubleshooting.md) |
-| Testing (unit, csi-sanity, k3s VM) | [doc/testing.md](doc/testing.md)             |
-
----
+- [charts/retyc-csi/README.md](charts/retyc-csi/README.md): chart values
+- [doc/configuration.md](doc/configuration.md): per-namespace credentials, adopting an existing dataroom, flags
+- [doc/troubleshooting.md](doc/troubleshooting.md)
+- [doc/architecture.md](doc/architecture.md): how it works, consistency, security, limitations
+- [doc/testing.md](doc/testing.md): development environment and tests
 
 ## Development
 
-```sh
-make build        # local binary, both modes
-make test         # go test -race ./...
-make lint         # golangci-lint, same rules as retyc-cli
-make helm-lint    # chart lint + render in every credential mode
-make image        # container image
-
-# Full end-to-end environment: single-node k3s on Debian trixie, Vagrant + libvirt
-make vm-up        # boot + provision, then: make image vm-load vm-secret vm-helm
+```console
+$ make build test lint     # driver
+$ make helm-lint           # chart
+$ make image               # container image
+$ make vm-up               # single-node k3s in a Vagrant VM, then: make image vm-load vm-secret vm-helm
 ```
-
-CI (GitHub Actions) runs lint, tests with the race detector, `govulncheck`, the chart lint with `kubeconform`
-against the oldest and newest supported Kubernetes, and a full image build on every push. A `v*` tag publishes
-the multi-arch image and the driver's GitHub release; bumping `charts/retyc-csi/Chart.yaml` on `master` publishes
-the chart (Helm repository on GitHub Pages, OCI artifact, GitHub release). The end-to-end run against a real
-cluster needs virtualisation and stays local, in the Vagrant VM.
-
----
 
 ## License
 
