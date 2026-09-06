@@ -65,23 +65,22 @@ team ships, embedded from the official `ghcr.io/retyc/retyc-cli` image. Full wal
 ### With Helm (recommended)
 
 ```sh
-# While the repository is private, the nodes need a pull secret for ghcr.io (PAT with read:packages):
-kubectl -n kube-system create secret docker-registry ghcr \
-  --docker-server=ghcr.io --docker-username=<github user> --docker-password=<token>
+helm repo add retyc https://retyc.github.io/retyc-k8s-csi
+helm repo update
 
 read -rs RETYC_KEY_PASSPHRASE          # never on the command line history
-helm install retyc-csi oci://ghcr.io/retyc/charts/retyc-csi \
+helm install retyc-csi retyc/retyc-csi \
   --namespace kube-system \
-  --set imagePullSecrets[0].name=ghcr \
   --set credentials.token="$RETYC_TOKEN" \
   --set credentials.keyPassphrase="$RETYC_KEY_PASSPHRASE"
 
 kubectl -n kube-system get pods -l app.kubernetes.io/instance=retyc-csi   # 2/2 Running
 ```
 
-Every release publishes the chart to `oci://ghcr.io/retyc/charts` and the image to `ghcr.io/retyc/retyc-k8s-csi`
-(mirrored to Docker Hub as `retyc/retyc-k8s-csi`), tagged with the release; from a checkout, `./charts/retyc-csi`
-works the same way. The chart installs
+The same chart is available as an OCI artifact, `helm install retyc-csi oci://ghcr.io/retyc/charts/retyc-csi`, and
+from a checkout as `./charts/retyc-csi`. Chart versions are listed on the
+[releases page](https://github.com/retyc/retyc-k8s-csi/releases); each one pins the driver image
+(`ghcr.io/retyc/retyc-k8s-csi`, mirrored on Docker Hub as `retyc/retyc-k8s-csi`) it was tested with. The chart installs
 the `CSIDriver`, RBAC, the controller `Deployment`, the node `DaemonSet` and the three StorageClasses. `credentials.existingSecret` points it at a Secret you manage yourself; without any credentials the
 driver serves per-namespace identities only. Every value is documented in
 [charts/retyc-csi/README.md](charts/retyc-csi/README.md).
@@ -227,8 +226,9 @@ make vm-up        # boot + provision, then: make image vm-load vm-secret vm-helm
 
 CI (GitHub Actions) runs lint, tests with the race detector, `govulncheck`, the chart lint with `kubeconform`
 against the oldest and newest supported Kubernetes, and a full image build on every push. A `v*` tag publishes
-the multi-arch image, the chart and a GitHub release. The end-to-end run against a real cluster needs
-virtualisation and stays local, in the Vagrant VM.
+the multi-arch image and the driver's GitHub release; bumping `charts/retyc-csi/Chart.yaml` on `master` publishes
+the chart (Helm repository on GitHub Pages, OCI artifact, GitHub release). The end-to-end run against a real
+cluster needs virtualisation and stays local, in the Vagrant VM.
 
 ---
 
