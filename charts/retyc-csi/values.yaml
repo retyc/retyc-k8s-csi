@@ -8,10 +8,7 @@ image:
   pullPolicy: IfNotPresent
 
 # -- Pull secrets for the driver image, applied to both the controller and the node plugin (the
-# sidecar images are public). Required while the ghcr.io package is private:
-#   kubectl -n kube-system create secret docker-registry ghcr --docker-server=ghcr.io \
-#     --docker-username=<github user> --docker-password=<PAT with read:packages>
-#   --set imagePullSecrets[0].name=ghcr
+# sidecar images are public). Only needed for a private mirror of the image.
 imagePullSecrets: []
 
 nameOverride: ""

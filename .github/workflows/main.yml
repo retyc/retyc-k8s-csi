@@ -14,6 +14,7 @@ on:
       - '.github/workflows/_docker.yml'
   pull_request:
     paths: *code_paths
+  workflow_dispatch:
 
 jobs:
   ci:
