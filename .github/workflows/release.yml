@@ -38,7 +38,14 @@ jobs:
 
       # The driver's release: image tags and generated notes. The chart is released separately,
       # by the Chart workflow, when charts/retyc-csi/Chart.yaml is bumped to reference this tag.
+      # A release created from the GitHub UI creates the tag (and this run) itself: nothing to
+      # do then, the run only has to publish the image.
       - name: GitHub release
-        run: gh release create "${GITHUB_REF_NAME}" --generate-notes --verify-tag
+        run: |
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            echo "release ${GITHUB_REF_NAME} already exists, keeping it"
+          else
+            gh release create "${GITHUB_REF_NAME}" --generate-notes --verify-tag
+          fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
