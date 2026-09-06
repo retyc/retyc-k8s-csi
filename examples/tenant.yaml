@@ -45,3 +45,21 @@ spec:
     - name: data
       persistentVolumeClaim:
         claimName: team-data
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: team-reader
+  namespace: team-a
+spec:
+  containers:
+    - name: reader
+      image: busybox:1.36
+      command: ["sh", "-c", "while true; do echo \"--- $(date)\"; tail -n 3 /data/log.txt; sleep 5; done"]
+      volumeMounts:
+        - name: data
+          mountPath: /data
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: team-data

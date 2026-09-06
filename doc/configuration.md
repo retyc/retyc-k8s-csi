@@ -90,7 +90,7 @@ What to know before rolling it out:
   scrypt peak). Adjust the DaemonSet limit accordingly.
 
 Example, with a namespace, its Secret, a claim and a pod:
-[`examples/tenant.yaml.example`](../examples/tenant.yaml.example).
+[`examples/tenant.yaml`](../examples/tenant.yaml).
 
 ## Adopting an existing dataroom
 
@@ -104,7 +104,17 @@ retyc --json dataroom ls          # id + title
 Then fill in and apply [`examples/static-pv.yaml`](../examples/static-pv.yaml). Use `Retain` on a static
 PV: the provisioner never deletes volumes it did not create.
 
-## Probes and resources
+## Health endpoints, probes and resources
+
+Both modes serve `/healthz` (liveness) and `/readyz` (readiness) on `--http-endpoint` (default `:9808`), and the CSI
+`Probe` RPC reports the same readiness.
+
+- **Node**: ready when the supervised `retyc webdav serve` answers on loopback. When it does not, `/readyz` returns
+  the process state and its last output line - e.g. `key passphrase check failed` - and the same line is logged.
+- **Controller**: ready when `retyc auth status` reports an authenticated account (checked every two minutes).
+
+Liveness is deliberately lenient on the node: restarting the plugin breaks every mount on that node, so a bad
+credential shows up as a `1/2` NotReady pod, never as a restart loop. See [troubleshooting.md](troubleshooting.md).
 
 Both driver containers expose port `9808`:
 
@@ -129,3 +139,13 @@ make image RETYC_CLI_VERSION=v1.3.0
 
 The image is based on `debian:trixie-slim` with `davfs2`, `libnss-unknown`, CA certificates and the `/etc/mtab`
 symlink that `mount.davfs` requires under containerd.
+
+## Installing without Helm
+
+`helm template` renders the same resources as plain YAML, for GitOps pipelines or a `kubectl apply`:
+
+```sh
+helm template retyc-csi retyc/retyc-csi -n kube-system --set credentials.existingSecret=retyc-csi-credentials
+```
+
+The chart is also available as an OCI artifact: `helm install retyc-csi oci://ghcr.io/retyc/charts/retyc-csi`.
