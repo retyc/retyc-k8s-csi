@@ -1,0 +1,10 @@
+{{- /*
+Arbitrary extra manifests, rendered as templates so they can reference the release
+(e.g. {{ .Release.Namespace }}, {{ include "retyc-csi.fullname" . }}). Typical use: a NetworkPolicy
+for clusters that default-deny egress, a CiliumNetworkPolicy, a PriorityClass, a Secret managed
+by an external operator. See values.yaml.
+*/ -}}
+{{- range .Values.extraObjects }}
+---
+{{ tpl (toYaml .) $ }}
+{{- end }}

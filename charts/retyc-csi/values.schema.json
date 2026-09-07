@@ -47,6 +47,7 @@
         "node": { "$ref": "#/$defs/serviceAccount" }
       }
     },
+    "extraObjects": { "type": "array", "items": { "type": "object" } },
     "healthPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
     "logLevel": { "type": "integer", "minimum": 0, "maximum": 10 },
     "probes": {

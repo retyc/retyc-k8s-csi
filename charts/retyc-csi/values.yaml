@@ -67,6 +67,40 @@ serviceAccount:
     name: ""
     annotations: {}
 
+# -- Extra Kubernetes objects to deploy with the release, each one rendered as a template (so
+# `{{ .Release.Namespace }}` and `{{ include "retyc-csi.fullname" . }}` work). Use it for anything
+# your cluster requires around the driver without patching the chart: a NetworkPolicy on a
+# default-deny cluster, a CiliumNetworkPolicy, a Secret from an external-secrets operator...
+#
+# The driver's only traffic: HTTPS to api.retyc.com and auth.retyc.com from both components,
+# DNS, and the Kubernetes API from the csi-provisioner sidecar. The WebDAV server is loopback
+# inside the node pod and never crosses a NetworkPolicy. Example, with the Retyc endpoints as
+# CIDRs since a plain NetworkPolicy has no notion of hostname:
+#
+# extraObjects:
+#   - apiVersion: networking.k8s.io/v1
+#     kind: NetworkPolicy
+#     metadata:
+#       name: '{{ include "retyc-csi.fullname" . }}-egress'
+#       namespace: '{{ .Release.Namespace }}'
+#     spec:
+#       podSelector:
+#         matchLabels:
+#           app.kubernetes.io/name: '{{ include "retyc-csi.name" . }}'
+#           app.kubernetes.io/instance: '{{ .Release.Name }}'
+#       policyTypes: [Egress]
+#       egress:
+#         - to:                                   # cluster DNS
+#             - namespaceSelector: {}
+#               podSelector:
+#                 matchLabels: {k8s-app: kube-dns}
+#           ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+#         - to: [{ipBlock: {cidr: 10.0.0.1/32}}]   # kube-apiserver (csi-provisioner)
+#           ports: [{protocol: TCP, port: 6443}]
+#         - to: [{ipBlock: {cidr: 203.0.113.0/24}}] # api.retyc.com / auth.retyc.com
+#           ports: [{protocol: TCP, port: 443}]
+extraObjects: []
+
 # -- Port of the driver's /healthz and /readyz endpoints, in both components.
 healthPort: 9808
 
