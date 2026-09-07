@@ -88,6 +88,9 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
+            {{- with .Values.node.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           {{- include "retyc-csi.credentialsEnvFrom" . | nindent 10 }}
           securityContext:
             privileged: true
@@ -104,6 +107,9 @@ spec:
               mountPropagation: Bidirectional
             - name: dev-fuse
               mountPath: /dev/fuse
+            {{- with .Values.node.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
       volumes:
         - name: socket-dir
           hostPath:
@@ -125,6 +131,9 @@ spec:
           hostPath:
             path: /dev/fuse
             type: CharDevice
+        {{- with .Values.node.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- with .Values.node.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

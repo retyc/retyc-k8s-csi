@@ -67,6 +67,40 @@ serviceAccount:
     name: ""
     annotations: {}
 
+# -- Extra Kubernetes objects to deploy with the release, each one rendered as a template (so
+# `{{ .Release.Namespace }}` and `{{ include "retyc-csi.fullname" . }}` work). Use it for anything
+# your cluster requires around the driver without patching the chart: a NetworkPolicy on a
+# default-deny cluster, a CiliumNetworkPolicy, a Secret from an external-secrets operator...
+#
+# The driver's only traffic: HTTPS to api.retyc.com and auth.retyc.com from both components,
+# DNS, and the Kubernetes API from the csi-provisioner sidecar. The WebDAV server is loopback
+# inside the node pod and never crosses a NetworkPolicy. Example, with the Retyc endpoints as
+# CIDRs since a plain NetworkPolicy has no notion of hostname:
+#
+# extraObjects:
+#   - apiVersion: networking.k8s.io/v1
+#     kind: NetworkPolicy
+#     metadata:
+#       name: '{{ include "retyc-csi.fullname" . }}-egress'
+#       namespace: '{{ .Release.Namespace }}'
+#     spec:
+#       podSelector:
+#         matchLabels:
+#           app.kubernetes.io/name: '{{ include "retyc-csi.name" . }}'
+#           app.kubernetes.io/instance: '{{ .Release.Name }}'
+#       policyTypes: [Egress]
+#       egress:
+#         - to:                                   # cluster DNS
+#             - namespaceSelector: {}
+#               podSelector:
+#                 matchLabels: {k8s-app: kube-dns}
+#           ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+#         - to: [{ipBlock: {cidr: 10.0.0.1/32}}]   # kube-apiserver (csi-provisioner)
+#           ports: [{protocol: TCP, port: 6443}]
+#         - to: [{ipBlock: {cidr: 203.0.113.0/24}}] # api.retyc.com / auth.retyc.com
+#           ports: [{protocol: TCP, port: 443}]
+extraObjects: []
+
 # -- Port of the driver's /healthz and /readyz endpoints, in both components.
 healthPort: 9808
 
@@ -91,6 +125,19 @@ controller:
   replicas: 1
   # -- Extra arguments for the driver container.
   extraArgs: []
+  # -- Extra environment variables for the driver container, e.g. an egress proxy:
+  #   extraEnv:
+  #     - {name: HTTPS_PROXY, value: http://proxy.internal:3128}
+  #     - {name: NO_PROXY, value: 127.0.0.1,localhost,10.0.0.0/8}
+  extraEnv: []
+  # -- Extra volumes and mounts for the driver container, e.g. a private CA bundle for a TLS
+  # inspection proxy:
+  #   extraVolumes:
+  #     - {name: ca, configMap: {name: corporate-ca}}
+  #   extraVolumeMounts:
+  #     - {name: ca, mountPath: /etc/ssl/certs/corporate-ca.crt, subPath: ca.crt, readOnly: true}
+  extraVolumes: []
+  extraVolumeMounts: []
   resources:
     requests:
       cpu: 10m
@@ -126,6 +173,19 @@ node:
   stateDir: /var/lib/retyc-csi
   # -- Extra arguments for the driver container.
   extraArgs: []
+  # -- Extra environment variables for the driver container, e.g. an egress proxy:
+  #   extraEnv:
+  #     - {name: HTTPS_PROXY, value: http://proxy.internal:3128}
+  #     - {name: NO_PROXY, value: 127.0.0.1,localhost,10.0.0.0/8}
+  extraEnv: []
+  # -- Extra volumes and mounts for the driver container, e.g. a private CA bundle for a TLS
+  # inspection proxy:
+  #   extraVolumes:
+  #     - {name: ca, configMap: {name: corporate-ca}}
+  #   extraVolumeMounts:
+  #     - {name: ca, mountPath: /etc/ssl/certs/corporate-ca.crt, subPath: ca.crt, readOnly: true}
+  extraVolumes: []
+  extraVolumeMounts: []
   # Steady state is ~40 MiB per identity served on the node; unlocking an AGE key needs ~256 MiB
   # transiently (scrypt). A limit below ~350 MiB OOM-kills the plugin on the first mount, and with
   # it every mount on the node. Raise it with the number of tenant identities per node.
