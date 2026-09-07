@@ -1,6 +1,6 @@
 module github.com/retyc/retyc-k8s-csi
 
-go 1.26.0
+go 1.26.8
 
 require (
 	github.com/container-storage-interface/spec v1.11.0
