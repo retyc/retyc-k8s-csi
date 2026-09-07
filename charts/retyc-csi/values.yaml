@@ -125,6 +125,19 @@ controller:
   replicas: 1
   # -- Extra arguments for the driver container.
   extraArgs: []
+  # -- Extra environment variables for the driver container, e.g. an egress proxy:
+  #   extraEnv:
+  #     - {name: HTTPS_PROXY, value: http://proxy.internal:3128}
+  #     - {name: NO_PROXY, value: 127.0.0.1,localhost,10.0.0.0/8}
+  extraEnv: []
+  # -- Extra volumes and mounts for the driver container, e.g. a private CA bundle for a TLS
+  # inspection proxy:
+  #   extraVolumes:
+  #     - {name: ca, configMap: {name: corporate-ca}}
+  #   extraVolumeMounts:
+  #     - {name: ca, mountPath: /etc/ssl/certs/corporate-ca.crt, subPath: ca.crt, readOnly: true}
+  extraVolumes: []
+  extraVolumeMounts: []
   resources:
     requests:
       cpu: 10m
@@ -160,6 +173,19 @@ node:
   stateDir: /var/lib/retyc-csi
   # -- Extra arguments for the driver container.
   extraArgs: []
+  # -- Extra environment variables for the driver container, e.g. an egress proxy:
+  #   extraEnv:
+  #     - {name: HTTPS_PROXY, value: http://proxy.internal:3128}
+  #     - {name: NO_PROXY, value: 127.0.0.1,localhost,10.0.0.0/8}
+  extraEnv: []
+  # -- Extra volumes and mounts for the driver container, e.g. a private CA bundle for a TLS
+  # inspection proxy:
+  #   extraVolumes:
+  #     - {name: ca, configMap: {name: corporate-ca}}
+  #   extraVolumeMounts:
+  #     - {name: ca, mountPath: /etc/ssl/certs/corporate-ca.crt, subPath: ca.crt, readOnly: true}
+  extraVolumes: []
+  extraVolumeMounts: []
   # Steady state is ~40 MiB per identity served on the node; unlocking an AGE key needs ~256 MiB
   # transiently (scrypt). A limit below ~350 MiB OOM-kills the plugin on the first mount, and with
   # it every mount on the node. Raise it with the number of tenant identities per node.

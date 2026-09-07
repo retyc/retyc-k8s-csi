@@ -77,13 +77,23 @@ spec:
             {{- toYaml .Values.probes.readiness | nindent 12 }}
           resources:
             {{- toYaml .Values.controller.resources | nindent 12 }}
+          {{- with .Values.controller.extraEnv }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           {{- include "retyc-csi.credentialsEnvFrom" . | nindent 10 }}
           volumeMounts:
             - name: socket-dir
               mountPath: /csi
+            {{- with .Values.controller.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
       volumes:
         - name: socket-dir
           emptyDir: {}
+        {{- with .Values.controller.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- with .Values.controller.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
