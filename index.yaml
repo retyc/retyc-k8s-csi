@@ -5,6 +5,34 @@ entries:
       artifacthub.io/category: storage
       artifacthub.io/license: MIT
     apiVersion: v2
+    appVersion: v0.2.0
+    created: "2026-09-07T11:42:43.606196752Z"
+    description: Kubernetes CSI driver for Retyc datarooms - ReadWriteMany volumes
+      with end-to-end post-quantum encryption
+    digest: cb8707a4fa8d14babee56d7954d4f11a52f923f858b28646520988d268cd1c2f
+    home: https://retyc.com
+    keywords:
+    - csi
+    - storage
+    - retyc
+    - dataroom
+    - readwritemany
+    - encryption
+    kubeVersion: '>=1.34.0-0'
+    maintainers:
+    - name: Retyc
+      url: https://retyc.com
+    name: retyc-csi
+    sources:
+    - https://github.com/retyc/retyc-k8s-csi
+    type: application
+    urls:
+    - https://github.com/retyc/retyc-k8s-csi/releases/download/retyc-csi-0.2.0/retyc-csi-0.2.0.tgz
+    version: 0.2.0
+  - annotations:
+      artifacthub.io/category: storage
+      artifacthub.io/license: MIT
+    apiVersion: v2
     appVersion: v0.1.0
     created: "2026-09-06T12:31:44.458578408Z"
     description: Kubernetes CSI driver for Retyc datarooms - ReadWriteMany volumes
@@ -29,4 +57,4 @@ entries:
     urls:
     - https://github.com/retyc/retyc-k8s-csi/releases/download/retyc-csi-0.1.0/retyc-csi-0.1.0.tgz
     version: 0.1.0
-generated: "2026-09-06T12:31:44.458583148Z"
+generated: "2026-09-07T11:42:43.606204015Z"
