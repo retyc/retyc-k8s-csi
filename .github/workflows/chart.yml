@@ -54,9 +54,20 @@ jobs:
         if: steps.cr.outputs.changed_charts != ''
         run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
 
+      # Check remote version before bump chart 
       - name: Push to OCI registry
         if: steps.cr.outputs.changed_charts != ''
         run: |
+          shopt -s nullglob
           for pkg in .cr-release-packages/*.tgz; do
+            meta=$(helm show chart "$pkg")
+            # Anchored on ^ so nested "name:"/"version:" keys (maintainers, dependencies) cannot
+            # win, and without yq, whose implementations disagree on quoting scalars.
+            name=$(echo "$meta" | awk -F': *' '/^name:/ { gsub(/"/, "", $2); print $2; exit }')
+            version=$(echo "$meta" | awk -F': *' '/^version:/ { gsub(/"/, "", $2); print $2; exit }')
+            if helm show chart "oci://ghcr.io/retyc/charts/$name" --version "$version" >/dev/null 2>&1; then
+              echo "oci://ghcr.io/retyc/charts/$name:$version already published, skipping"
+              continue
+            fi
             helm push "$pkg" oci://ghcr.io/retyc/charts
           done
