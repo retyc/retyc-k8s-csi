@@ -8,7 +8,7 @@ ARG VERSION=dev
 ARG REVISION=unknown
 ARG CREATED=1970-01-01T00:00:00Z
 
-FROM golang:1.26-trixie AS builder
+FROM golang:1.26.8-trixie AS builder
 ARG VERSION
 
 WORKDIR /src
