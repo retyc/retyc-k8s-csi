@@ -1,7 +1,7 @@
 # The retyc-cli release embedded in the image — the single source of truth for that version.
 # Bump it here (Dependabot proposes it); `make image RETYC_CLI_VERSION=...` overrides for a
 # one-off build.
-ARG RETYC_CLI_VERSION=v1.2.0-rc2
+ARG RETYC_CLI_VERSION=v1.2.0
 # Build provenance, set by `make image` (git describe / rev-parse / date -u); also reported by the
 # driver's GetPluginInfo through ldflags.
 ARG VERSION=dev
