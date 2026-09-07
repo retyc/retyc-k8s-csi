@@ -8,7 +8,7 @@ LDFLAGS      := -s -w -X $(MODULE)/internal/driver.DriverVersion=$(VERSION)
 
 CHART        := charts/retyc-csi
 
-.PHONY: build test vet lint clean image helm-lint helm-template helm-package \
+.PHONY: build test vet lint vulncheck clean image helm-lint helm-template helm-package \
 	vm-up vm-retyc vm-load vm-secret vm-helm vm-restart vm-ssh vm-destroy
 
 ## Build the driver binary (both controller and node modes)
@@ -27,7 +27,9 @@ vet:
 lint:
 	golangci-lint run ./...
 
-## Remove built binary
+vulncheck:
+	govulncheck ./...
+
 clean:
 	rm -f $(BINARY)
 
