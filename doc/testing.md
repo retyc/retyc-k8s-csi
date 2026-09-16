@@ -80,7 +80,7 @@ export RETYC_TOKEN=<offline token>
 retyc --json dataroom create --title csi-manual-test
 
 # 1. Serve
-retyc webdav serve --addr 127.0.0.1 --port 8888 &
+retyc webdav serve --addr 127.0.0.1:8888 &
 
 # 2. Mount it twice, as two independent clients (this is what two nodes look like)
 sudo mkdir -p /mnt/a /mnt/b
