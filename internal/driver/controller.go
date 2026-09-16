@@ -142,16 +142,31 @@ func (s *ControllerServer) CreateVolume(
 	return createVolumeResponse(result.ID, result.Title, req), nil
 }
 
+// Volume context keys, persisted on the PV (spec.csi.volumeAttributes) and handed to NodeStageVolume.
+const (
+	volumeContextTitle     = "title"
+	volumeContextNamespace = "pvcNamespace"
+)
+
+// pvcNamespaceParameter is added to CreateVolume parameters by csi-provisioner --extra-create-metadata.
+const pvcNamespaceParameter = "csi.storage.k8s.io/pvc/namespace"
+
 // createVolumeResponse builds the CSI response for a dataroom. Requested capacity is echoed back
 // unmodified (best-effort: Retyc has no per-dataroom size cap to enforce it
 // against). VolumeContext carries the dataroom title so NodeStageVolume can build the WebDAV
-// mount path without a separate ID→title lookup.
+// mount path without a separate ID→title lookup, and the claim's namespace, which names the
+// tenant of the node's WebDAV server in the metrics.
 func createVolumeResponse(id, title string, req *csi.CreateVolumeRequest) *csi.CreateVolumeResponse {
+	volumeContext := map[string]string{volumeContextTitle: title}
+	if ns := req.GetParameters()[pvcNamespaceParameter]; ns != "" {
+		volumeContext[volumeContextNamespace] = ns
+	}
+
 	return &csi.CreateVolumeResponse{
 		Volume: &csi.Volume{
 			VolumeId:      id,
 			CapacityBytes: req.GetCapacityRange().GetRequiredBytes(),
-			VolumeContext: map[string]string{"title": title},
+			VolumeContext: volumeContext,
 		},
 	}
 }

@@ -58,7 +58,7 @@ func TestSupervisor_PassesAddrAsHostPort(t *testing.T) {
 
 		return err == nil && got != ""
 	})
-	if want := "webdav serve --addr 127.0.0.1:8888 --metrics-addr 127.0.0.1:8889"; got != want {
+	if want := "webdav serve --addr 127.0.0.1:8888 --metrics-addr 127.0.0.1:8889 --metrics-runtime=false"; got != want {
 		t.Fatalf("child args = %q, want %q", got, want)
 	}
 }

@@ -10,7 +10,7 @@ Everything below is exposed by the Helm chart (`charts/retyc-csi`); the value na
 | `--mode` | | `controller` or `node` (required) |
 | `--endpoint` | `unix:///csi/csi.sock` | CSI gRPC endpoint; only `unix://` is supported |
 | `--retyc-bin` | `retyc` | path to the `retyc` CLI binary |
-| `--http-endpoint` | `:9808` | address of the `/healthz` and `/readyz` endpoints; empty disables them |
+| `--http-endpoint` | `:9808` | address of the `/healthz`, `/readyz` and `/metrics` endpoints; empty disables them |
 | `--node-id` | `$NODE_ID`, then the hostname | node ID reported by `NodeGetInfo` (node mode) |
 | `--webdav-addr` | `127.0.0.1` | bind address of the supervised `retyc webdav serve` servers (node mode) |
 | `--webdav-port` | `8888` | first port; each identity's server takes the next two free ones, WebDAV and probes (node mode) |
@@ -132,6 +132,62 @@ Both driver containers expose port `9808`:
 Resources default to a 64 MiB request and a 512 MiB limit per driver container. Keep the node plugin's limit above
 ~350 MiB: unlocking the AGE key needs ~256 MiB transiently, and each tenant identity adds a server
 (see [architecture.md](architecture.md#resource-profile)).
+
+## Metrics
+
+Both driver containers serve Prometheus metrics on `/metrics`, same port as the probes (`9808`, container port
+`health`). With the Prometheus Operator, `metrics.podMonitor.enabled=true` creates a `PodMonitor` for both components
+(add the labels your Prometheus selects on in `metrics.podMonitor.labels`); without it, scrape port `health` of the
+pods labeled `app.kubernetes.io/name=retyc-csi`.
+
+| Metric | Component | Meaning |
+|--------|-----------|---------|
+| `go_*`, `process_*` | both | runtime of the driver process |
+| `retyc_csi_build_info{version, mode}` | both | constant 1 |
+| `retyc_csi_webdav_server_up{identity, tenant}` | node | 1 when that server answered its scrape, 0 when it is down, starting or stuck |
+| `retyc_cli_*{identity, tenant, ...}` | node | the metrics of every `retyc webdav serve` on the node: WebDAV requests and latency, bytes transferred, Retyc API calls and latency, cache efficiency, token refreshes and expiry, crypto time. See the CLI's [WebDAV metrics](https://github.com/retyc/retyc-cli/blob/master/doc/webdav.md#metrics) |
+
+The node runs one server per identity, and two labels name it:
+
+- `identity`: the same key as in `/readyz` and the logs, a hash of the credentials, safe to expose. Constant for the
+  life of the server and unique on the node: use it to follow a server over time (`rate()`, `sum by (identity)`).
+- `tenant`: who uses the server, for humans. It can change while the server runs.
+
+| `tenant` | Server |
+|----------|--------|
+| `_default` | the driver's cluster-wide identity, whatever the namespaces of its volumes |
+| `team-a` | a tenant identity, by the namespace of the claims staged through it on this node |
+| `team-a,team-b` | the same tenant Secret values copied into several namespaces: one identity, one server |
+| empty | a tenant whose volumes do not record their namespace (see below) |
+
+Two different tenant Secrets in one namespace give two servers with the same `tenant` and different `identity`.
+`identity` and `tenant` are reserved: the driver overwrites them on every series, including a
+`RETYC_WEBDAV_METRICS_LABELS` set in `node.extraEnv`.
+
+The controller records the claim's namespace in the PV's `volumeAttributes` (`pvcNamespace`, from csi-provisioner's
+`--extra-create-metadata`). PVs provisioned before that have none, and PV attributes cannot be changed: their tenant
+stays empty until they are recreated. A static PV using a tenant Secret can set `pvcNamespace` itself
+([`examples/static-pv.yaml`](../examples/static-pv.yaml)); a value that is not a namespace name is ignored with a
+warning.
+
+A tenant's label follows the volumes staged on the node, which the node plugin only learns at `NodeStageVolume`. After
+a node plugin restart - which breaks the tenants' mounts anyway, see [troubleshooting.md](troubleshooting.md) - their
+servers do not reappear in the metrics until a volume of that identity is staged again.
+
+The node plugin scrapes its servers on loopback at each scrape of its own `/metrics` (concurrently, 3 s each, two
+scrapes of `/metrics` at most at once); a server that does not answer only loses its `retyc_cli_*` series for that
+scrape and reports `up` 0. `/metrics` listens on the pod IP like the probes, without authentication: it carries
+namespace names, identity keys, normalized API routes and versions, no dataroom content. On a cluster that restricts
+pod traffic, allow ingress to port `9808` from Prometheus only, e.g. with a NetworkPolicy in `extraObjects`.
+
+Useful starting points:
+
+```promql
+retyc_csi_webdav_server_up == 0                                                     # a server down on a node
+sum by (identity, tenant) (rate(retyc_cli_webdav_requests_total{status=~"5.."}[5m])) # WebDAV errors per server
+histogram_quantile(0.95, sum by (le, route) (rate(retyc_cli_api_request_duration_seconds_bucket[5m])))
+retyc_cli_token_expiry_seconds < 300                                                # access token about to expire
+```
 
 ## Image
 

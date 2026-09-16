@@ -34,6 +34,9 @@ type Pool struct {
 	mu      sync.Mutex
 	servers map[string]*server // by identity key
 	byPath  map[string]string  // staging path -> identity key
+	// namespaces maps a staging path to its claim's namespace ("" when the PV does not record it),
+	// which names the tenant of its server in the metrics.
+	namespaces map[string]string
 }
 
 type server struct {
@@ -51,6 +54,8 @@ func NewPool(ctx context.Context, binPath string, baseEnv []string, addr string,
 		ctx:     ctx,
 		servers: map[string]*server{},
 		byPath:  map[string]string{},
+
+		namespaces: map[string]string{},
 	}
 }
 
@@ -87,16 +92,16 @@ var ErrNoCredentials = errors.New("no credentials: the request carried no secret
 	"has no default RETYC_TOKEN / RETYC_KEY_PASSPHRASE")
 
 // Acquire returns the server to mount stagingPath against: the one for creds, started if
-// needed, or the pinned default when creds is nil. It is idempotent per staging path, so a
-// retried NodeStageVolume does not double-count.
-func (p *Pool) Acquire(stagingPath string, creds *identity.Credentials) (*Supervisor, error) {
+// needed, or the pinned default when creds is nil. namespace is the claim's namespace, "" when
+// unknown. It is idempotent per staging path, so a retried NodeStageVolume does not double-count.
+func (p *Pool) Acquire(stagingPath string, creds *identity.Credentials, namespace string) (*Supervisor, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	if creds == nil {
 		for _, srv := range p.servers {
 			if srv.pinned {
-				return p.attach(stagingPath, srv), nil
+				return p.attach(stagingPath, namespace, srv), nil
 			}
 		}
 
@@ -107,19 +112,22 @@ func (p *Pool) Acquire(stagingPath string, creds *identity.Credentials) (*Superv
 		return nil, err
 	}
 
-	return p.attach(stagingPath, srv), nil
+	return p.attach(stagingPath, namespace, srv), nil
 }
 
 // attach records stagingPath -> srv (locked). Re-attaching the same path to the same server is a
 // no-op; to a different server it releases the previous one first.
-func (p *Pool) attach(stagingPath string, srv *server) *Supervisor {
+func (p *Pool) attach(stagingPath, namespace string, srv *server) *Supervisor {
 	if prev, ok := p.byPath[stagingPath]; ok {
 		if prev == srv.key {
+			p.namespaces[stagingPath] = namespace
+
 			return srv.sup
 		}
 		p.releaseLocked(stagingPath)
 	}
 	p.byPath[stagingPath] = srv.key
+	p.namespaces[stagingPath] = namespace
 	srv.refs++
 
 	return srv.sup
@@ -139,6 +147,7 @@ func (p *Pool) releaseLocked(stagingPath string) {
 		return
 	}
 	delete(p.byPath, stagingPath)
+	delete(p.namespaces, stagingPath)
 	srv := p.servers[key]
 	srv.refs--
 	if srv.refs > 0 || srv.pinned {

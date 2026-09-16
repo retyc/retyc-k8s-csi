@@ -1,4 +1,4 @@
-// Package health serves the HTTP liveness/readiness endpoints of the driver.
+// Package health serves the HTTP liveness/readiness endpoints of the driver, and its /metrics.
 //
 // The two endpoints deliberately mean different things. /healthz only says "the process is up
 // and serving"; it backs the kubelet livenessProbe, and a failure there restarts the container.
@@ -26,10 +26,14 @@ type Checker func(ctx context.Context) error
 // checkTimeout bounds a single /readyz evaluation so a hung dependency cannot pin the probe.
 const checkTimeout = 5 * time.Second
 
-// Handler returns the HTTP mux serving /healthz and /readyz. ready may be nil, in which case
-// /readyz always succeeds (there is nothing mode-specific to check).
-func Handler(ready Checker) http.Handler {
+// Handler returns the HTTP mux serving /healthz, /readyz and, when metrics is not nil, /metrics.
+// ready may be nil, in which case /readyz always succeeds (there is nothing mode-specific to
+// check).
+func Handler(ready Checker, metrics http.Handler) http.Handler {
 	mux := http.NewServeMux()
+	if metrics != nil {
+		mux.Handle("/metrics", metrics)
+	}
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintln(w, "ok")
 	})
@@ -67,7 +71,7 @@ func ListenAndServe(ctx context.Context, addr string, handler http.Handler) erro
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 
-	klog.Infof("health endpoints listening on %s (/healthz, /readyz)", listener.Addr())
+	klog.Infof("HTTP endpoints listening on %s (/healthz, /readyz, /metrics)", listener.Addr())
 	if err := srv.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}

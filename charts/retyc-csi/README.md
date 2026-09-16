@@ -49,7 +49,10 @@ DaemonSet rolls one node at a time; plan upgrades like node drains.
 | `storageClasses` | three classes | List of StorageClasses: `name`, `reclaimPolicy`, `volumeBindingMode`, `isDefault`, `annotations`, `tenantSecretName` |
 | `rbac.create` | `true` | Create the provisioner ClusterRole/Binding (Secrets access added when a class uses `tenantSecretName`) |
 | `serviceAccount.controller.*` / `serviceAccount.node.*` | create | `create`, `name`, `annotations` |
-| `healthPort` | `9808` | `/healthz` and `/readyz` port of the driver containers |
+| `healthPort` | `9808` | `/healthz`, `/readyz` and `/metrics` port of the driver containers |
+| `metrics.podMonitor.enabled` | `false` | Create a Prometheus Operator `PodMonitor` scraping both components |
+| `metrics.podMonitor.namespace` / `labels` | `""` / `{}` | Where to create it, and labels your Prometheus selects on |
+| `metrics.podMonitor.interval` / `scrapeTimeout` / `relabelings` / `metricRelabelings` | Prometheus defaults | Scrape settings |
 | `logLevel` | `2` | klog verbosity |
 | `probes.liveness` / `probes.readiness` | see values | Probe timings, shared by both components |
 | `controller.replicas` | `1` | Add `--leader-election` to `controller.provisioner.extraArgs` for more |

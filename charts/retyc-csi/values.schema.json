@@ -49,6 +49,23 @@
     },
     "extraObjects": { "type": "array", "items": { "type": "object" } },
     "healthPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+    "metrics": {
+      "type": "object",
+      "properties": {
+        "podMonitor": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "namespace": { "type": "string" },
+            "labels": { "type": "object" },
+            "interval": { "type": "string" },
+            "scrapeTimeout": { "type": "string" },
+            "relabelings": { "type": "array", "items": { "type": "object" } },
+            "metricRelabelings": { "type": "array", "items": { "type": "object" } }
+          }
+        }
+      }
+    },
     "logLevel": { "type": "integer", "minimum": 0, "maximum": 10 },
     "probes": {
       "type": "object",
