@@ -3,6 +3,7 @@ package webdavsvc
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 
 	"github.com/retyc/retyc-k8s-csi/internal/identity"
@@ -29,8 +30,12 @@ func TestPool_OneServerPerIdentity(t *testing.T) {
 	}
 
 	s3, err := p.Acquire("/stage/vol3", b)
-	if err != nil || s3 == s1 || s3.Port == s1.Port {
-		t.Fatalf("different identity must get its own server/port: %+v, %v", s3, err)
+	if err != nil || s3 == s1 {
+		t.Fatalf("different identity must get its own server: %+v, %v", s3, err)
+	}
+	ports := map[int]bool{s1.Port: true, s1.MetricsPort: true, s3.Port: true, s3.MetricsPort: true}
+	if len(ports) != 4 {
+		t.Fatalf("every server needs its own WebDAV and probes ports: %+v, %+v", s1, s3)
 	}
 	waitFor(t, "servers running", func() bool { return s1.Status().Running && s3.Status().Running })
 
@@ -49,12 +54,16 @@ func TestPool_OneServerPerIdentity(t *testing.T) {
 func TestPool_DefaultIdentity(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	p := NewPool(ctx, fakeBinary(t, "exec sleep 30"), nil, "127.0.0.1", 41000, t.TempDir())
+	stateDir := t.TempDir()
+	// A config directory set on the pod must not be shared by the identities' servers.
+	p := NewPool(ctx, fakeBinary(t, "exec sleep 30"), []string{identity.ConfigDirKey + "=/shared"}, "127.0.0.1", 41000,
+		stateDir)
 
 	if _, err := p.Acquire("/stage/v", nil); !errors.Is(err, ErrNoCredentials) {
 		t.Fatalf("no default identity: want ErrNoCredentials, got %v", err)
 	}
-	def, err := p.Pin(&identity.Credentials{Token: "t", Passphrase: "p"})
+	creds := &identity.Credentials{Token: "t", Passphrase: "p"}
+	def, err := p.Pin(creds)
 	if err != nil || p.Default() != def {
 		t.Fatalf("Pin: %v", err)
 	}
@@ -67,14 +76,15 @@ func TestPool_DefaultIdentity(t *testing.T) {
 		t.Fatal("pinned server must not stop on release")
 	}
 	env := def.Env
+	wantConfigDir := identity.ConfigDirKey + "=" + filepath.Join(stateDir, creds.Key(), "config", "retyc")
 	found := 0
 	for _, kv := range env {
 		switch kv {
-		case identity.TokenKey + "=t", identity.PassphraseKey + "=p":
+		case identity.TokenKey + "=t", identity.PassphraseKey + "=p", wantConfigDir:
 			found++
 		}
 	}
-	if found != 2 {
+	if found != 3 {
 		t.Fatalf("server env must carry the identity, got %v", env)
 	}
 }

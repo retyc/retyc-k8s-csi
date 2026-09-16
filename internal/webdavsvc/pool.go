@@ -18,14 +18,14 @@ import (
 // Pool runs one supervised `retyc webdav serve` per Retyc identity in use on the node. The
 // cluster-wide default identity (from the driver's environment) is pinned for the life of the
 // process; per-tenant identities arriving through NodeStageVolume secrets are started on first
-// use and stopped when their last staged volume is unstaged. Every server gets its own loopback
-// port and its own XDG state directory, so the CLI's caches and tokens never mix.
+// use and stopped when their last staged volume is unstaged. Every server gets its own two loopback
+// ports (WebDAV and probes) and its own state directory, so the CLI's caches and tokens never mix.
 type Pool struct {
 	BinPath string
 	// BaseEnv is the environment every server inherits, before identity-specific overrides.
 	BaseEnv []string
 	Addr    string
-	// BasePort is the first loopback port tried; each server takes the next free one.
+	// BasePort is the first loopback port tried; each server takes the next two free ones.
 	BasePort int
 	// StateDir holds one sub-directory per identity (HOME + XDG_* of its server).
 	StateDir string
@@ -159,7 +159,7 @@ func (p *Pool) ensure(creds *identity.Credentials) (*server, error) {
 		return srv, nil
 	}
 
-	port, err := p.freePort()
+	ports, err := p.freePorts(2)
 	if err != nil {
 		return nil, err
 	}
@@ -172,16 +172,20 @@ func (p *Pool) ensure(creds *identity.Credentials) (*server, error) {
 	env["XDG_CONFIG_HOME"] = filepath.Join(dir, "config")
 	env["XDG_CACHE_HOME"] = filepath.Join(dir, "cache")
 	env["XDG_DATA_HOME"] = filepath.Join(dir, "data")
+	// The CLI's own override of its config directory wins over XDG_CONFIG_HOME: pinned to the
+	// same place, so a RETYC_CONFIG_DIR in the pod environment cannot make identities share one.
+	env[identity.ConfigDirKey] = filepath.Join(dir, "config", "retyc")
 
 	ctx, cancel := context.WithCancel(p.ctx) //nolint:gosec // G118: stored in server, called by releaseLocked
 	srv := &server{
 		key:    key,
 		cancel: cancel,
 		sup: &Supervisor{
-			BinPath: p.BinPath,
-			Env:     identity.MergeEnv(p.BaseEnv, env),
-			Addr:    p.Addr,
-			Port:    port,
+			BinPath:     p.BinPath,
+			Env:         identity.MergeEnv(p.BaseEnv, env),
+			Addr:        p.Addr,
+			Port:        ports[0],
+			MetricsPort: ports[1],
 		},
 	}
 	klog.Infof("webdavsvc: starting server for identity %s on %s", key, srv.sup.BaseURL())
@@ -195,13 +199,15 @@ func (p *Pool) stateDir(key string) string {
 	return filepath.Join(p.StateDir, key)
 }
 
-// freePort returns the first port >= BasePort that no pool server uses and that binds (locked).
-func (p *Pool) freePort() (int, error) {
+// freePorts returns the first n ports >= BasePort that no pool server uses and that bind (locked).
+func (p *Pool) freePorts(n int) ([]int, error) {
 	used := map[int]bool{}
 	for _, srv := range p.servers {
 		used[srv.sup.Port] = true
+		used[srv.sup.MetricsPort] = true
 	}
-	for port := p.BasePort; port < p.BasePort+1000; port++ {
+	ports := make([]int, 0, n)
+	for port := p.BasePort; port < p.BasePort+1000 && len(ports) < n; port++ {
 		if used[port] {
 			continue
 		}
@@ -210,11 +216,13 @@ func (p *Pool) freePort() (int, error) {
 			continue
 		}
 		_ = l.Close()
-
-		return port, nil
+		ports = append(ports, port)
+	}
+	if len(ports) < n {
+		return nil, fmt.Errorf("fewer than %d free ports in [%d, %d) on %s", n, p.BasePort, p.BasePort+1000, p.Addr)
 	}
 
-	return 0, fmt.Errorf("no free port in [%d, %d) on %s", p.BasePort, p.BasePort+1000, p.Addr)
+	return ports, nil
 }
 
 // Healthy reports nil when every server in the pool answers, or one error listing those that

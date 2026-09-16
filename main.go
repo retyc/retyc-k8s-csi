@@ -68,8 +68,10 @@ func run(o options) error {
 	server := grpc.NewServer()
 	var ready health.Checker
 	// The pod's Secret (envFrom) provides the cluster-wide default identity, if any; tenants'
-	// identities arrive per request through CSI secrets.
-	env := os.Environ()
+	// identities arrive per request through CSI secrets. The CLI's key cache is off for every
+	// child: it keeps an unlocked AGE key in the kernel session keyring under one fixed name,
+	// which all the children of this process share whatever identity they run as.
+	env := identity.MergeEnv(os.Environ(), map[string]string{identity.KeyringEnabledKey: "false"})
 	defaultIdentity := identity.FromEnv(env)
 
 	switch o.mode {

@@ -24,6 +24,16 @@ line:
 
 Fix the Secret, then `kubectl -n kube-system rollout restart ds/retyc-csi-node`.
 
+## Node pod is `1/2`, `/readyz` says `retyc webdav serve not answering` or `not ready: HTTP 503`
+
+The server process is alive but not serving:
+
+- `not answering on http://127.0.0.1:<port>/readyz` right after a (re)start: it is still checking the login and
+  unlocking the key, which takes a few seconds (scrypt). If it lasts, the last output line in the message says where
+  it is stuck;
+- `not ready: HTTP 503`: it is shutting down, usually because its login expired. It exits, and the supervisor
+  restarts it five seconds later; a restart that ends in `retyc webdav serve is not running` is a token problem (above).
+
 ## Controller pod is `1/2`
 
 `retyc auth status` does not report an authenticated account: token problem, same fix as above with
