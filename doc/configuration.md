@@ -13,15 +13,16 @@ Everything below is exposed by the Helm chart (`charts/retyc-csi`); the value na
 | `--http-endpoint` | `:9808` | address of the `/healthz` and `/readyz` endpoints; empty disables them |
 | `--node-id` | `$NODE_ID`, then the hostname | node ID reported by `NodeGetInfo` (node mode) |
 | `--webdav-addr` | `127.0.0.1` | bind address of the supervised `retyc webdav serve` servers (node mode) |
-| `--webdav-port` | `8888` | first port; each identity's server takes the next free one (node mode) |
+| `--webdav-port` | `8888` | first port; each identity's server takes the next two free ones, WebDAV and probes (node mode) |
 | `--state-dir` | `/var/lib/retyc-csi` | per-identity state of the `retyc` servers (node mode) |
 
 `klog` flags (`-v`, `--logtostderr`, ...) are accepted as well.
 
 ## Environment
 
-The driver passes its whole environment to every `retyc` subprocess, so the CLI's own variables apply. The two that
-matter are injected from the `retyc-csi-credentials` Secret with `envFrom`:
+The driver passes its whole environment to every `retyc` subprocess, so the CLI's own variables apply, except the ones
+it sets itself: `RETYC_KEYRING_ENABLED=false` everywhere, `RETYC_CONFIG_DIR` and the listen addresses per WebDAV
+server. The two that matter are injected from the `retyc-csi-credentials` Secret with `envFrom`:
 
 | Variable | Value |
 |----------|-------|
@@ -29,6 +30,10 @@ matter are injected from the `retyc-csi-credentials` Secret with `envFrom`:
 | `RETYC_KEY_PASSPHRASE` | passphrase of the account's AGE key |
 
 `NODE_ID` is set by the DaemonSet from `spec.nodeName`.
+
+Never mount a `token.json` (from `retyc auth login`) into the driver pods. When a `RETYC_TOKEN` is expired or revoked,
+the CLI falls back to the token stored in its config directory, so a tenant whose token was revoked would run as the
+account of that file. The driver itself never writes one: with `RETYC_TOKEN` set, the CLI keeps tokens in memory.
 
 The driver's own environment is the **cluster-wide default identity**. It is optional: a driver started without
 `RETYC_TOKEN` serves only StorageClasses that carry secret parameters (see below), and its controller readiness then
@@ -76,7 +81,7 @@ parameters:
 
 A namespace using the class must hold a Secret named `retyc-credentials` with the same two keys as the driver's
 Secret. The provisioner reads it for `CreateVolume` and `DeleteVolume` (it records the reference on the PV), kubelet
-reads it for `NodeStageVolume`. On each node the driver runs one `retyc webdav serve` per identity in use, on
+reads it for `NodeStageVolume`. On each node the driver runs one `retyc webdav serve` per identity in use, on two
 consecutive loopback ports from `--webdav-port`, each with its own state directory under `--state-dir`; a tenant's
 server stops when its last volume leaves the node.
 
@@ -109,8 +114,9 @@ PV: the provisioner never deletes volumes it did not create.
 Both modes serve `/healthz` (liveness) and `/readyz` (readiness) on `--http-endpoint` (default `:9808`), and the CSI
 `Probe` RPC reports the same readiness.
 
-- **Node**: ready when the supervised `retyc webdav serve` answers on loopback. When it does not, `/readyz` returns
-  the process state and its last output line - e.g. `key passphrase check failed` - and the same line is logged.
+- **Node**: ready when every supervised `retyc webdav serve` reports ready on its own loopback `/readyz`. When one
+  does not, `/readyz` returns the process state and its last output line - e.g. `key passphrase check failed` - and
+  the same line is logged.
 - **Controller**: ready when `retyc auth status` reports an authenticated account (checked every two minutes).
 
 Liveness is deliberately lenient on the node: restarting the plugin breaks every mount on that node, so a bad
@@ -121,7 +127,7 @@ Both driver containers expose port `9808`:
 | Probe | Path | Period | Meaning |
 |-------|------|--------|---------|
 | liveness | `/healthz` | 30 s, 5 failures | the process serves HTTP at all |
-| readiness | `/readyz` | 10 s, 2 failures | node: WebDAV server answering on loopback; controller: `retyc auth status` authenticated (cached 2 min) |
+| readiness | `/readyz` | 10 s, 2 failures | node: WebDAV servers ready on loopback; controller: `retyc auth status` authenticated (cached 2 min) |
 
 Resources default to a 64 MiB request and a 512 MiB limit per driver container. Keep the node plugin's limit above
 ~350 MiB: unlocking the AGE key needs ~256 MiB transiently, and each tenant identity adds a server

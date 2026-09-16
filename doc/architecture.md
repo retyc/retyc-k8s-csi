@@ -55,8 +55,10 @@ An identity is an offline token plus the passphrase of the account's AGE key. Th
 The controller runs each `retyc` subprocess with the request's credentials. The node plugin keeps a pool of WebDAV
 servers keyed by a hash of the credentials: the default one is pinned for the life of the process, a tenant's is
 started at the first `NodeStageVolume` that needs it and stopped at the `NodeUnstageVolume` of its last volume. Each
-server has its own loopback port and its own `HOME`/`XDG_*` directory under `/var/lib/retyc-csi`, so tokens and caches
-never mix between accounts.
+server has its own two loopback ports (WebDAV and probes) and its own `HOME`/`XDG_*`/`RETYC_CONFIG_DIR` directory
+under `/var/lib/retyc-csi`, so tokens and caches never mix between accounts. The CLI's kernel keyring cache of the
+unlocked key is turned off (`RETYC_KEYRING_ENABLED=false`) for every subprocess of both components: it lives under one
+fixed name in a keyring they all share.
 
 ## Volume lifecycle
 
@@ -84,6 +86,11 @@ encrypting on write with the account's AGE identity. Each server listens on a lo
 identity, the next free ones for tenants) inside the node plugin's network namespace, without WebDAV authentication:
 the only client that can reach it is the `davfs2` mount started from the same container. Nothing on the node or in
 other pods can connect to it.
+
+Each server also gets a second loopback port for `--metrics-addr` (`8889` for the default identity). The driver
+probes its `/readyz` - it never calls the Retyc API - to decide when a staged volume can be mounted and whether the
+node plugin is ready: the listener comes up once the login check and the key unlock succeeded, answers `200` while the
+WebDAV port serves, and `503` as soon as the server shuts down (signal, expired login).
 
 The supervisor restarts a server five seconds after any exit and keeps its last output line, which is what `/readyz`
 reports when a server is down (for instance `key passphrase check failed: wrong key passphrase`), prefixed by the

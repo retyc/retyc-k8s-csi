@@ -26,6 +26,11 @@ type Supervisor struct {
 	Env  []string
 	Addr string
 	Port int
+	// MetricsPort is the child's second listener (`--metrics-addr`, on Addr), serving /readyz.
+	// It binds once the login check and key unlock succeeded; /readyz is then 200 while the
+	// WebDAV port serves and 503 as soon as a shutdown starts (signal, expired login). Probing
+	// it never calls the Retyc API.
+	MetricsPort int
 
 	mu     sync.Mutex
 	status Status
@@ -79,8 +84,8 @@ func (s *Supervisor) setLastOutput(line string) {
 // healthyTimeout bounds the HTTP round-trip Healthy makes against the loopback server.
 const healthyTimeout = 2 * time.Second
 
-// Healthy reports nil when the supervised server is alive and answers HTTP on BaseURL, or an
-// error that says why not (process state, last output, connection error). A success resets
+// Healthy reports nil when the supervised server is alive and its /readyz says it serves, or an
+// error that says why not (process state, last output, probe result). A success resets
 // ConsecutiveFailures.
 func (s *Supervisor) Healthy(ctx context.Context) error {
 	st := s.Status()
@@ -91,18 +96,9 @@ func (s *Supervisor) Healthy(ctx context.Context) error {
 
 	ctx, cancel := context.WithTimeout(ctx, healthyTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodOptions, s.BaseURL()+"/", nil)
-	if err != nil {
-		return err
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("retyc webdav serve not answering on %s (started %s ago; last output: %q): %w",
-			s.BaseURL(), time.Since(st.StartedAt).Round(time.Second), st.LastOutput, err)
-	}
-	_ = resp.Body.Close()
-	if resp.StatusCode >= http.StatusInternalServerError {
-		return fmt.Errorf("retyc webdav serve answered HTTP %d on OPTIONS /", resp.StatusCode)
+	if err := s.probeReady(ctx); err != nil {
+		return fmt.Errorf("retyc webdav serve %w (started %s ago; last output: %q)",
+			err, time.Since(st.StartedAt).Round(time.Second), st.LastOutput)
 	}
 
 	s.mu.Lock()
@@ -122,6 +118,30 @@ func (s *Supervisor) hostPort() string {
 	return net.JoinHostPort(s.Addr, fmt.Sprint(s.Port))
 }
 
+// metricsHostPort is the host:port of the child's probes listener (`--metrics-addr`).
+func (s *Supervisor) metricsHostPort() string {
+	return net.JoinHostPort(s.Addr, fmt.Sprint(s.MetricsPort))
+}
+
+// probeReady GETs the child's /readyz once. The error reads after "retyc webdav serve".
+func (s *Supervisor) probeReady(ctx context.Context) error {
+	readyz := "http://" + s.metricsHostPort() + "/readyz"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, readyz, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("not answering on %s: %w", readyz, err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("not ready: HTTP %d on %s (starting up or shutting down)", resp.StatusCode, readyz)
+	}
+
+	return nil
+}
+
 // Run starts the supervised loop and blocks until ctx is cancelled. Call it in its own goroutine.
 // A crash is logged and retried with a fixed backoff. On ctx cancellation the child gets SIGTERM
 // (retyc webdav serve drains in-flight uploads and cleans up orphaned nodes on SIGTERM; the
@@ -137,9 +157,10 @@ func (s *Supervisor) Run(ctx context.Context) {
 		default:
 		}
 
-		klog.Infof("webdavsvc: starting `retyc webdav serve --addr %s`", s.hostPort())
+		args := []string{"webdav", "serve", "--addr", s.hostPort(), "--metrics-addr", s.metricsHostPort()}
+		klog.Infof("webdavsvc: starting `retyc %s`", strings.Join(args, " "))
 		//nolint:gosec // G204: BinPath is controller-configured, not user input
-		cmd := exec.CommandContext(ctx, s.BinPath, "webdav", "serve", "--addr", s.hostPort())
+		cmd := exec.CommandContext(ctx, s.BinPath, args...)
 		cmd.Env = s.Env
 		cmd.Stdout = klogWriter{onLine: s.setLastOutput}
 		cmd.Stderr = klogWriter{onLine: s.setLastOutput}
@@ -162,22 +183,22 @@ func (s *Supervisor) Run(ctx context.Context) {
 	}
 }
 
-// WaitReady blocks until the server accepts TCP connections, or ctx is done.
+// WaitReady blocks until the server's /readyz reports it serves WebDAV, or ctx is done.
 func (s *Supervisor) WaitReady(ctx context.Context) error {
-	addr := s.hostPort()
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
-		conn, err := net.DialTimeout("tcp", addr, time.Second)
+		attemptCtx, cancel := context.WithTimeout(ctx, time.Second)
+		err := s.probeReady(attemptCtx)
+		cancel()
 		if err == nil {
-			_ = conn.Close()
-
 			return nil
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("waiting for webdav server on %s: %w", addr, ctx.Err())
+			return fmt.Errorf("waiting for retyc webdav serve on %s: %w (last probe: %v; last output: %q)",
+				s.hostPort(), ctx.Err(), err, s.Status().LastOutput)
 		case <-ticker.C:
 		}
 	}

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -38,13 +39,13 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	}
 }
 
-// retyc-cli v1.3.0 dropped --port: --addr takes host:port, and an unknown flag makes the child
-// crash-loop on startup.
+// retyc-cli v1.3.0 dropped --port: --addr (and --metrics-addr) take host:port, and an unknown flag
+// makes the child crash-loop on startup.
 func TestSupervisor_PassesAddrAsHostPort(t *testing.T) {
 	argsFile := t.TempDir() + "/args"
 	s := &Supervisor{
 		BinPath: fakeBinary(t, `echo "$@" > `+argsFile+`; exec sleep 30`),
-		Addr:    "127.0.0.1", Port: 8888,
+		Addr:    "127.0.0.1", Port: 8888, MetricsPort: 8889,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -57,7 +58,7 @@ func TestSupervisor_PassesAddrAsHostPort(t *testing.T) {
 
 		return err == nil && got != ""
 	})
-	if want := "webdav serve --addr 127.0.0.1:8888"; got != want {
+	if want := "webdav serve --addr 127.0.0.1:8888 --metrics-addr 127.0.0.1:8889"; got != want {
 		t.Fatalf("child args = %q, want %q", got, want)
 	}
 }
@@ -87,32 +88,70 @@ func TestSupervisor_CrashLoopIsReportedWithLastOutput(t *testing.T) {
 	}
 }
 
-func TestSupervisor_HealthyProbesTheServer(t *testing.T) {
+// readyzServer stands in for the probes listener of `retyc webdav serve --metrics-addr`, answering
+// GET /readyz with *status. It returns the host and port to set on a Supervisor.
+func readyzServer(t *testing.T, status *atomic.Int32) (*httptest.Server, string, int) {
+	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodOptions {
-			t.Errorf("expected OPTIONS, got %s", r.Method)
+		if r.Method != http.MethodGet || r.URL.Path != "/readyz" {
+			t.Errorf("expected GET /readyz, got %s %s", r.Method, r.URL.Path)
 		}
-		w.WriteHeader(http.StatusOK)
+		w.WriteHeader(int(status.Load()))
 	}))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 	host, portStr, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
 	port, _ := strconv.Atoi(portStr)
 
+	return srv, host, port
+}
+
+func TestSupervisor_HealthyProbesReadyz(t *testing.T) {
+	var status atomic.Int32
+	status.Store(http.StatusOK)
+	srv, host, port := readyzServer(t, &status)
+
 	// A child that stays alive stands in for a serving `retyc webdav serve`; the HTTP side is
 	// the httptest server above.
-	s := &Supervisor{BinPath: fakeBinary(t, "exec sleep 30"), Addr: host, Port: port}
+	s := &Supervisor{BinPath: fakeBinary(t, "exec sleep 30"), Addr: host, Port: 1, MetricsPort: port}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go s.Run(ctx)
 	waitFor(t, "child running", func() bool { return s.Status().Running })
 
 	if err := s.Healthy(ctx); err != nil {
-		t.Fatalf("Healthy against a serving backend: %v", err)
+		t.Fatalf("Healthy against a ready server: %v", err)
+	}
+
+	status.Store(http.StatusServiceUnavailable) // starting up, or shutting down on an expired login
+	err := s.Healthy(ctx)
+	if err == nil || !strings.Contains(err.Error(), "not ready: HTTP 503") {
+		t.Fatalf("Healthy with /readyz at 503: %v", err)
 	}
 
 	srv.Close()
-	err := s.Healthy(ctx)
+	err = s.Healthy(ctx)
 	if err == nil || !strings.Contains(err.Error(), "not answering") {
 		t.Fatalf("Healthy with the HTTP side gone: %v", err)
+	}
+}
+
+func TestSupervisor_WaitReadyWaitsForReadyz(t *testing.T) {
+	var status atomic.Int32
+	status.Store(http.StatusServiceUnavailable)
+	_, host, port := readyzServer(t, &status)
+	s := &Supervisor{Addr: host, Port: 1, MetricsPort: port}
+
+	// The probes listener is up but the WebDAV port is not bound yet: still waiting.
+	short, cancelShort := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancelShort()
+	if err := s.WaitReady(short); err == nil || !strings.Contains(err.Error(), "HTTP 503") {
+		t.Fatalf("WaitReady while /readyz is 503: %v", err)
+	}
+
+	time.AfterFunc(300*time.Millisecond, func() { status.Store(http.StatusOK) })
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.WaitReady(ctx); err != nil {
+		t.Fatalf("WaitReady once /readyz turns 200: %v", err)
 	}
 }

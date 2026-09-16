@@ -167,7 +167,7 @@ controller:
 node:
   # -- Root of the kubelet state on the nodes.
   kubeletDir: /var/lib/kubelet
-  # -- First loopback port of the supervised `retyc webdav serve` servers (one per identity, consecutive ports).
+  # -- First loopback port of the supervised `retyc webdav serve` servers (two per identity, WebDAV and probes, consecutive ports).
   webdavPort: 8888
   # -- Per-identity state of the retyc servers, inside the container.
   stateDir: /var/lib/retyc-csi

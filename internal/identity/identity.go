@@ -16,6 +16,15 @@ const (
 	PassphraseKey = "RETYC_KEY_PASSPHRASE" //nolint:gosec // G101: a variable name, not a credential
 )
 
+// Environment variables the driver sets on retyc subprocesses to keep identities apart.
+const (
+	// ConfigDirKey overrides the CLI's config directory (config.yaml, token.json); it wins over
+	// XDG_CONFIG_HOME.
+	ConfigDirKey = "RETYC_CONFIG_DIR"
+	// KeyringEnabledKey toggles the CLI's cache of the unlocked AGE key in the kernel session keyring.
+	KeyringEnabledKey = "RETYC_KEYRING_ENABLED"
+)
+
 // Credentials is one Retyc identity.
 type Credentials struct {
 	Token      string

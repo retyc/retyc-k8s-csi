@@ -60,7 +60,7 @@ DaemonSet rolls one node at a time; plan upgrades like node drains.
 | `controller.extraVolumes` / `controller.extraVolumeMounts` | `[]` | Extra volumes for the driver container (e.g. a private CA bundle) |
 | `controller.{podAnnotations,podLabels,nodeSelector,tolerations,affinity,priorityClassName}` | | Scheduling |
 | `node.kubeletDir` | `/var/lib/kubelet` | Kubelet root on the nodes |
-| `node.webdavPort` | `8888` | First loopback port of the `retyc webdav serve` servers |
+| `node.webdavPort` | `8888` | First loopback port of the `retyc webdav serve` servers (two per identity) |
 | `node.stateDir` | `/var/lib/retyc-csi` | Per-identity state inside the container |
 | `node.resources` | 64Mi / 512Mi | Keep the limit above ~350 MiB per identity (scrypt peak) |
 | `node.registrar.image.*` | `csi-node-driver-registrar:v2.17.0` | Sidecar image |
