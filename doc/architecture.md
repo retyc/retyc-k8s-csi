@@ -90,7 +90,9 @@ other pods can connect to it.
 Each server also gets a second loopback port for `--metrics-addr` (`8889` for the default identity). The driver
 probes its `/readyz` - it never calls the Retyc API - to decide when a staged volume can be mounted and whether the
 node plugin is ready: the listener comes up once the login check and the key unlock succeeded, answers `200` while the
-WebDAV port serves, and `503` as soon as the server shuts down (signal, expired login).
+WebDAV port serves, and `503` as soon as the server shuts down (signal, expired login). The same listener serves the
+server's `/metrics`, which the node plugin merges, labeled with the identity key and the tenant's namespace, into its own `/metrics`
+(see [configuration.md](configuration.md#metrics)).
 
 The supervisor restarts a server five seconds after any exit and keeps its last output line, which is what `/readyz`
 reports when a server is down (for instance `key passphrase check failed: wrong key passphrase`), prefixed by the

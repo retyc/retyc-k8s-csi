@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"regexp"
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -58,6 +59,23 @@ func dataroomURL(server *webdavsvc.Supervisor, title string) string {
 	return fmt.Sprintf("%s/dataroom/%s", server.BaseURL(), url.PathEscape(title))
 }
 
+// namespaceName is a Kubernetes namespace name (RFC 1123 label).
+var namespaceName = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
+
+// claimNamespace returns the claim namespace recorded in a volume context, or "" when it is absent
+// or not a namespace name. A static PV's attributes are free text: an invalid value must not end up
+// in the tenant label, where "_default" or a comma already mean something.
+func claimNamespace(volumeContext map[string]string) string {
+	ns := volumeContext[volumeContextNamespace]
+	if ns != "" && !namespaceName.MatchString(ns) {
+		klog.Warningf("ignoring volume_context[%q] = %q: not a namespace name", volumeContextNamespace, ns)
+
+		return ""
+	}
+
+	return ns
+}
+
 func (s *NodeServer) NodeStageVolume(
 	ctx context.Context, req *csi.NodeStageVolumeRequest,
 ) (*csi.NodeStageVolumeResponse, error) {
@@ -65,7 +83,7 @@ func (s *NodeServer) NodeStageVolume(
 	if stagingPath == "" {
 		return nil, status.Error(codes.InvalidArgument, "staging target path is required")
 	}
-	title := req.GetVolumeContext()["title"]
+	title := req.GetVolumeContext()[volumeContextTitle]
 	if title == "" {
 		return nil, status.Error(codes.InvalidArgument,
 			"volume_context[\"title\"] is required (set by ControllerServer.CreateVolume)")
@@ -75,7 +93,7 @@ func (s *NodeServer) NodeStageVolume(
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	server, err := s.Webdav.Acquire(stagingPath, creds)
+	server, err := s.Webdav.Acquire(stagingPath, creds, claimNamespace(req.GetVolumeContext()))
 	if err != nil {
 		return nil, status.Error(codes.FailedPrecondition, err.Error())
 	}

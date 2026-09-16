@@ -20,6 +20,7 @@ spec:
     volumeHandle: REPLACE-WITH-DATAROOM-ID        # e.g. 01a06bd5-45b6-7489-bc18-04990d98b0c2
     volumeAttributes:
       title: REPLACE-WITH-DATAROOM-TITLE          # e.g. pvc-cf063793-b879-489d-95ab-7b9f14d0f082
+      pvcNamespace: default                       # the claim's namespace: tenant label of the node metrics (optional)
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

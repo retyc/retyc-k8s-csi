@@ -157,7 +157,13 @@ func (s *Supervisor) Run(ctx context.Context) {
 		default:
 		}
 
-		args := []string{"webdav", "serve", "--addr", s.hostPort(), "--metrics-addr", s.metricsHostPort()}
+		// The node plugin exposes its own Go runtime metrics; the children's would collide with them.
+		// The tenant label is added when the pool merges the children's metrics: it follows the
+		// volumes staged through the server, which change during its life.
+		args := []string{
+			"webdav", "serve", "--addr", s.hostPort(),
+			"--metrics-addr", s.metricsHostPort(), "--metrics-runtime=false",
+		}
 		klog.Infof("webdavsvc: starting `retyc %s`", strings.Join(args, " "))
 		//nolint:gosec // G204: BinPath is controller-configured, not user input
 		cmd := exec.CommandContext(ctx, s.BinPath, args...)

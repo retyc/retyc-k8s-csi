@@ -14,6 +14,9 @@ import (
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/grpc"
 	"k8s.io/klog/v2"
 
@@ -38,7 +41,7 @@ func main() {
 		stateDir = flag.String("state-dir", "/var/lib/retyc-csi",
 			"directory for per-identity retyc state (node mode only)")
 		httpEndpoint = flag.String("http-endpoint", ":9808",
-			"address for the /healthz (liveness) and /readyz (readiness) HTTP endpoints; empty disables them")
+			"address for the /healthz (liveness), /readyz (readiness) and /metrics HTTP endpoints; empty disables them")
 	)
 	klog.InitFlags(nil)
 	flag.Parse()
@@ -67,6 +70,17 @@ func run(o options) error {
 
 	server := grpc.NewServer()
 	var ready health.Checker
+	registry := prometheus.NewRegistry()
+	registry.MustRegister(
+		collectors.NewGoCollector(),
+		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+			Name:        "retyc_csi_build_info",
+			Help:        "Constant 1, labeled with the driver version and the plugin mode.",
+			ConstLabels: prometheus.Labels{"version": driver.DriverVersion, "mode": o.mode},
+		}, func() float64 { return 1 }),
+	)
+	gatherers := prometheus.Gatherers{registry}
 	// The pod's Secret (envFrom) provides the cluster-wide default identity, if any; tenants'
 	// identities arrive per request through CSI secrets. The CLI's key cache is off for every
 	// child: it keeps an unlocked AGE key in the kernel session keyring under one fixed name,
@@ -105,6 +119,7 @@ func run(o options) error {
 			klog.Info("no default identity in the environment: only StorageClasses with secret parameters will work")
 		}
 		ready = pool.Healthy
+		gatherers = append(gatherers, pool)
 
 		csi.RegisterNodeServer(server, &driver.NodeServer{
 			NodeID:  nodeID,
@@ -117,9 +132,18 @@ func run(o options) error {
 	csi.RegisterIdentityServer(server, &driver.IdentityServer{Ready: ready})
 
 	if o.httpEndpoint != "" {
+		// A server that does not answer its scrape is reported by retyc_csi_webdav_server_up, not
+		// by failing the whole /metrics.
+		// The endpoint listens on the pod IP for kubelet's probes: bound concurrent scrapes, each of
+		// which fans out to every WebDAV server on the node.
+		metrics := promhttp.HandlerFor(gatherers, promhttp.HandlerOpts{
+			ErrorHandling:       promhttp.ContinueOnError,
+			ErrorLog:            klogPrinter{},
+			MaxRequestsInFlight: 2,
+		})
 		go func() {
-			if err := health.ListenAndServe(ctx, o.httpEndpoint, health.Handler(ready)); err != nil {
-				klog.Errorf("health endpoints: %v", err)
+			if err := health.ListenAndServe(ctx, o.httpEndpoint, health.Handler(ready, metrics)); err != nil {
+				klog.Errorf("HTTP endpoints: %v", err)
 			}
 		}()
 	}
@@ -139,6 +163,11 @@ func run(o options) error {
 
 	return server.Serve(listener)
 }
+
+// klogPrinter logs the errors promhttp continues past (a family dropped as inconsistent) as warnings.
+type klogPrinter struct{}
+
+func (klogPrinter) Println(v ...any) { klog.Warning(v...) }
 
 // listen parses a unix:// CSI endpoint and removes any stale socket file before binding.
 func listen(endpoint string) (net.Listener, error) {

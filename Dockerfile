@@ -1,6 +1,7 @@
 # The retyc-cli release embedded in the image — the single source of truth for that version.
 # Bump it here (Dependabot proposes it); `make image RETYC_CLI_VERSION=...` overrides for a
-# one-off build.
+# one-off build. The node plugin needs >= v1.3.0 (`webdav serve --addr host:port --metrics-addr
+# --metrics-runtime`): an older CLI exits on the unknown flags and every mount fails.
 ARG RETYC_CLI_VERSION=v1.3.0-rc1
 # Build provenance, set by `make image` (git describe / rev-parse / date -u); also reported by the
 # driver's GetPluginInfo through ldflags.

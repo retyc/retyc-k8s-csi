@@ -101,8 +101,29 @@ serviceAccount:
 #           ports: [{protocol: TCP, port: 443}]
 extraObjects: []
 
-# -- Port of the driver's /healthz and /readyz endpoints, in both components.
+# -- Port of the driver's /healthz, /readyz and /metrics endpoints, in both components.
 healthPort: 9808
+
+metrics:
+  # Both components serve Prometheus metrics on `healthPort` (container port `health`), always. The
+  # node plugin's include every supervised `retyc webdav serve` (retyc_cli_*) and
+  # `retyc_csi_webdav_server_up`, labeled `identity=<key>` and `tenant=<namespace>` (`_default` for
+  # the cluster-wide identity). See doc/configuration.md.
+  podMonitor:
+    # -- Create a Prometheus Operator PodMonitor for both components (needs the monitoring.coreos.com CRDs).
+    enabled: false
+    # -- Namespace of the PodMonitor; defaults to the release namespace.
+    namespace: ""
+    # -- Extra labels, e.g. the ones your Prometheus' podMonitorSelector matches.
+    labels: {}
+    # -- Scrape interval; empty uses Prometheus' default.
+    interval: ""
+    # -- Scrape timeout; empty uses Prometheus' default.
+    scrapeTimeout: ""
+    # -- Relabelings applied to the scraped targets.
+    relabelings: []
+    # -- Relabelings applied to the scraped series, e.g. to drop the driver's `go_*` families.
+    metricRelabelings: []
 
 # -- klog verbosity of the driver containers.
 logLevel: 2
