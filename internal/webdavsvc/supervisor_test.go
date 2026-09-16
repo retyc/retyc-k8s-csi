@@ -38,6 +38,30 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	}
 }
 
+// retyc-cli v1.3.0 dropped --port: --addr takes host:port, and an unknown flag makes the child
+// crash-loop on startup.
+func TestSupervisor_PassesAddrAsHostPort(t *testing.T) {
+	argsFile := t.TempDir() + "/args"
+	s := &Supervisor{
+		BinPath: fakeBinary(t, `echo "$@" > `+argsFile+`; exec sleep 30`),
+		Addr:    "127.0.0.1", Port: 8888,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.Run(ctx)
+
+	var got string
+	waitFor(t, "child args", func() bool {
+		b, err := os.ReadFile(argsFile) //nolint:gosec // G304: a t.TempDir() fixture
+		got = strings.TrimSpace(string(b))
+
+		return err == nil && got != ""
+	})
+	if want := "webdav serve --addr 127.0.0.1:8888"; got != want {
+		t.Fatalf("child args = %q, want %q", got, want)
+	}
+}
+
 func TestSupervisor_CrashLoopIsReportedWithLastOutput(t *testing.T) {
 	s := &Supervisor{
 		BinPath: fakeBinary(t, `echo "key passphrase check failed: wrong key passphrase" >&2; exit 1`),

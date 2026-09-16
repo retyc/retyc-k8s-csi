@@ -114,7 +114,12 @@ func (s *Supervisor) Healthy(ctx context.Context) error {
 
 // BaseURL returns the root URL of the supervised WebDAV server.
 func (s *Supervisor) BaseURL() string {
-	return "http://" + net.JoinHostPort(s.Addr, fmt.Sprint(s.Port))
+	return "http://" + s.hostPort()
+}
+
+// hostPort is the host:port the supervised server binds, as `retyc webdav serve --addr` takes it.
+func (s *Supervisor) hostPort() string {
+	return net.JoinHostPort(s.Addr, fmt.Sprint(s.Port))
 }
 
 // Run starts the supervised loop and blocks until ctx is cancelled. Call it in its own goroutine.
@@ -132,10 +137,9 @@ func (s *Supervisor) Run(ctx context.Context) {
 		default:
 		}
 
-		klog.Infof("webdavsvc: starting `retyc webdav serve --addr %s --port %d`", s.Addr, s.Port)
+		klog.Infof("webdavsvc: starting `retyc webdav serve --addr %s`", s.hostPort())
 		//nolint:gosec // G204: BinPath is controller-configured, not user input
-		cmd := exec.CommandContext(ctx, s.BinPath, "webdav", "serve",
-			"--addr", s.Addr, "--port", fmt.Sprint(s.Port))
+		cmd := exec.CommandContext(ctx, s.BinPath, "webdav", "serve", "--addr", s.hostPort())
 		cmd.Env = s.Env
 		cmd.Stdout = klogWriter{onLine: s.setLastOutput}
 		cmd.Stderr = klogWriter{onLine: s.setLastOutput}
@@ -160,7 +164,7 @@ func (s *Supervisor) Run(ctx context.Context) {
 
 // WaitReady blocks until the server accepts TCP connections, or ctx is done.
 func (s *Supervisor) WaitReady(ctx context.Context) error {
-	addr := net.JoinHostPort(s.Addr, fmt.Sprint(s.Port))
+	addr := s.hostPort()
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
 
