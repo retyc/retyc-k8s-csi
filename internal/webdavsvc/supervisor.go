@@ -7,7 +7,9 @@ package webdavsvc
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"os/exec"
@@ -19,7 +21,30 @@ import (
 	"k8s.io/klog/v2"
 )
 
+// Exit codes of `retyc webdav serve` saying a restart with the same environment will fail again
+// (sysexits.h, a stable contract of retyc-cli): the login cannot recover without a new token (none
+// stored, refresh token expired or revoked), or the key passphrase is missing or wrong. Any other
+// code, 1 included, may be transient (Retyc API or identity provider unreachable).
+const (
+	exitAuthRequired = 77 // EX_NOPERM
+	exitConfig       = 78 // EX_CONFIG
+)
+
+// Restart policy defaults, used when the matching Supervisor field is zero.
+const (
+	defaultRestartBackoff    = 5 * time.Second
+	defaultMaxRestartBackoff = 5 * time.Minute
+	defaultStableAfter       = time.Minute
+	defaultMaxFatalExits     = 3
+)
+
 // Supervisor keeps `retyc webdav serve` running on Addr:Port, restarting it if it exits.
+//
+// Restarts back off exponentially, so a server that cannot start (Retyc API down, revoked token)
+// does not hammer the API and the identity provider from every node. An exit code saying the
+// credentials themselves are unusable (77, 78) is retried MaxFatalExits times, in case the identity
+// provider was wrong for a moment, then the supervisor gives up: those credentials will never
+// work, and new ones mean a new identity key, hence a new server.
 type Supervisor struct {
 	BinPath string
 	// Env is the child's complete environment (exec.Cmd semantics: replaces, not appends).
@@ -32,8 +57,21 @@ type Supervisor struct {
 	// it never calls the Retyc API.
 	MetricsPort int
 
-	mu     sync.Mutex
-	status Status
+	// RestartBackoff is the delay before the first restart; it doubles with every consecutive
+	// failure, up to MaxRestartBackoff. Zero means 5 s and 5 min.
+	RestartBackoff    time.Duration
+	MaxRestartBackoff time.Duration
+	// StableAfter is how long a child must have lived for its exit not to count as a consecutive
+	// failure: a server that served for hours and lost its login restarts after RestartBackoff,
+	// not after the backoff of its last crash loop. Zero means 1 min.
+	StableAfter time.Duration
+	// MaxFatalExits is how many consecutive 77/78 exits the supervisor tolerates before giving up.
+	// Zero means 3.
+	MaxFatalExits int
+
+	mu         sync.Mutex
+	status     Status
+	fatalExits int // consecutive exits with exitAuthRequired or exitConfig
 }
 
 // Status is a snapshot of the supervised process, surfaced by /readyz and CSI Probe.
@@ -42,10 +80,20 @@ type Status struct {
 	Running bool
 	// StartedAt is when the current (or last) child was started.
 	StartedAt time.Time
-	// ConsecutiveFailures counts child exits since the last time Healthy() saw it serving.
+	// ConsecutiveFailures counts child exits since the child was last seen serving (Healthy or
+	// WaitReady) or last ran for StableAfter; it drives the restart backoff.
 	ConsecutiveFailures int
 	// LastExitError is the error of the most recent child exit ("" if none yet).
 	LastExitError string
+	// LastExitCode is the exit code of the most recent child exit: 0 before any exit, after a
+	// clean one or when the child could not be started, -1 when a signal killed it.
+	LastExitCode int
+	// NextRestart is when the next child starts, zero while one runs or after giving up.
+	NextRestart time.Time
+	// GaveUp is true once the supervisor stopped restarting the child: it exited MaxFatalExits
+	// times in a row with a code saying the credentials are unusable. Only new credentials (a new
+	// server) or a node plugin restart start it again.
+	GaveUp bool
 	// LastOutput is the last line the child wrote to stdout/stderr — with a crash-looping
 	// `retyc webdav serve` this is the actual reason ("key passphrase check failed: ...").
 	LastOutput string
@@ -59,20 +107,101 @@ func (s *Supervisor) Status() Status {
 	return s.status
 }
 
-func (s *Supervisor) setRunning(running bool, exitErr error) {
+func (s *Supervisor) setStarted() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.status.Running = running
-	if running {
-		s.status.StartedAt = time.Now()
+	s.status.Running = true
+	s.status.StartedAt = time.Now()
+	s.status.NextRestart = time.Time{}
+}
 
-		return
+// setExited records a child exit and returns how long to wait before the next start, or giveUp.
+func (s *Supervisor) setExited(exitErr error) (delay time.Duration, giveUp bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st := &s.status
+	st.Running = false
+	if time.Since(st.StartedAt) >= orDefault(s.StableAfter, defaultStableAfter) {
+		st.ConsecutiveFailures = 0
 	}
-	s.status.ConsecutiveFailures++
-	s.status.LastExitError = ""
+	st.ConsecutiveFailures++
+	st.LastExitError, st.LastExitCode = "", 0
 	if exitErr != nil {
-		s.status.LastExitError = exitErr.Error()
+		st.LastExitError = exitErr.Error()
+		var exitErrWithCode *exec.ExitError
+		if errors.As(exitErr, &exitErrWithCode) {
+			st.LastExitCode = exitErrWithCode.ExitCode()
+		}
 	}
+
+	if exitMeaning(st.LastExitCode) == "" {
+		s.fatalExits = 0
+	} else {
+		s.fatalExits++
+	}
+	maxFatal := s.MaxFatalExits
+	if maxFatal <= 0 {
+		maxFatal = defaultMaxFatalExits
+	}
+	if s.fatalExits >= maxFatal {
+		st.GaveUp = true
+
+		return 0, true
+	}
+
+	delay = restartDelay(orDefault(s.RestartBackoff, defaultRestartBackoff),
+		orDefault(s.MaxRestartBackoff, defaultMaxRestartBackoff), st.ConsecutiveFailures)
+	// Up to 10% of jitter, so the nodes of a cluster that failed together do not retry in step.
+	delay += rand.N(delay/10 + 1) //nolint:gosec // G404: jitter, not a secret
+	st.NextRestart = time.Now().Add(delay)
+
+	return delay, false
+}
+
+// setServing records that the child was seen serving: the next failure starts a fresh backoff.
+func (s *Supervisor) setServing() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.status.ConsecutiveFailures = 0
+	s.fatalExits = 0
+}
+
+// restartDelay is base doubled for every consecutive failure after the first, capped at maxDelay.
+func restartDelay(base, maxDelay time.Duration, consecutiveFailures int) time.Duration {
+	delay := base
+	for i := 1; i < consecutiveFailures && delay < maxDelay; i++ {
+		delay *= 2
+	}
+
+	return min(delay, maxDelay)
+}
+
+func orDefault(d, def time.Duration) time.Duration {
+	if d <= 0 {
+		return def
+	}
+
+	return d
+}
+
+// exitMeaning explains an exit code after which a restart with the same environment fails again,
+// or returns "" for any other code.
+func exitMeaning(code int) string {
+	switch code {
+	case exitAuthRequired:
+		return "authentication required: RETYC_TOKEN is missing, expired or revoked"
+	case exitConfig:
+		return "key passphrase missing or wrong"
+	}
+
+	return ""
+}
+
+// gaveUpError is the error Healthy and WaitReady report once the supervisor gave up.
+func gaveUpError(st Status) error {
+	return fmt.Errorf("retyc webdav serve gave up after %d consecutive exits, last with code %d (%s); "+
+		"fix the credentials: last output: %q",
+		st.ConsecutiveFailures, st.LastExitCode, exitMeaning(st.LastExitCode), st.LastOutput)
 }
 
 func (s *Supervisor) setLastOutput(line string) {
@@ -89,9 +218,13 @@ const healthyTimeout = 2 * time.Second
 // ConsecutiveFailures.
 func (s *Supervisor) Healthy(ctx context.Context) error {
 	st := s.Status()
+	if st.GaveUp {
+		return gaveUpError(st)
+	}
 	if !st.Running {
-		return fmt.Errorf("retyc webdav serve is not running (%d consecutive exits, last: %s; last output: %q)",
-			st.ConsecutiveFailures, st.LastExitError, st.LastOutput)
+		return fmt.Errorf("retyc webdav serve is not running (%d consecutive exits, last: %s; "+
+			"restarting in %s; last output: %q)", st.ConsecutiveFailures, st.LastExitError,
+			max(time.Until(st.NextRestart), 0).Round(time.Second), st.LastOutput)
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, healthyTimeout)
@@ -101,9 +234,7 @@ func (s *Supervisor) Healthy(ctx context.Context) error {
 			err, time.Since(st.StartedAt).Round(time.Second), st.LastOutput)
 	}
 
-	s.mu.Lock()
-	s.status.ConsecutiveFailures = 0
-	s.mu.Unlock()
+	s.setServing()
 
 	return nil
 }
@@ -142,14 +273,13 @@ func (s *Supervisor) probeReady(ctx context.Context) error {
 	return nil
 }
 
-// Run starts the supervised loop and blocks until ctx is cancelled. Call it in its own goroutine.
-// A crash is logged and retried with a fixed backoff. On ctx cancellation the child gets SIGTERM
+// Run starts the supervised loop and blocks until ctx is cancelled or the supervisor gives up (see
+// Supervisor). Call it in its own goroutine. A crash is logged and retried with an exponential
+// backoff. On ctx cancellation the child gets SIGTERM
 // (retyc webdav serve drains in-flight uploads and cleans up orphaned nodes on SIGTERM; the
 // default exec.CommandContext behaviour is SIGKILL, which would skip that) and SIGKILL if it's
 // still alive after the retyc server's own 15s drain bound.
 func (s *Supervisor) Run(ctx context.Context) {
-	const restartBackoff = 5 * time.Second
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -173,32 +303,44 @@ func (s *Supervisor) Run(ctx context.Context) {
 		cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 		cmd.WaitDelay = 20 * time.Second
 
-		s.setRunning(true, nil)
+		s.setStarted()
 		err := cmd.Run()
-		s.setRunning(false, err)
+		delay, giveUp := s.setExited(err)
 		if ctx.Err() != nil {
 			return
 		}
-		klog.Errorf("webdavsvc: retyc webdav serve exited: %v; restarting in %s", err, restartBackoff)
+		if giveUp {
+			klog.Errorf("webdavsvc: retyc webdav serve exited: %v; giving up: %v", err, gaveUpError(s.Status()))
+
+			return
+		}
+		klog.Errorf("webdavsvc: retyc webdav serve exited: %v; restarting in %s", err, delay.Round(time.Millisecond))
 
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(restartBackoff):
+		case <-time.After(delay):
 		}
 	}
 }
 
-// WaitReady blocks until the server's /readyz reports it serves WebDAV, or ctx is done.
+// WaitReady blocks until the server's /readyz reports it serves WebDAV, ctx is done or the
+// supervisor gave up.
 func (s *Supervisor) WaitReady(ctx context.Context) error {
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
+		// A supervisor that gave up never brings the server back: fail now, not at ctx's deadline.
+		if st := s.Status(); st.GaveUp {
+			return gaveUpError(st)
+		}
 		attemptCtx, cancel := context.WithTimeout(ctx, time.Second)
 		err := s.probeReady(attemptCtx)
 		cancel()
 		if err == nil {
+			s.setServing()
+
 			return nil
 		}
 		select {
