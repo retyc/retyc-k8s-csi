@@ -11,10 +11,13 @@ kubectl -n kube-system logs deploy/retyc-csi-controller -c retyc-csi-controller
 A driver container that refuses to be ready logs the reason on every failed probe (`/readyz: not ready: ...`); kubelet's
 own event only carries the HTTP 503.
 
-## Node pod is `1/2`, `/readyz` says `retyc webdav serve is not running`
+## Node pod is `1/2`, `/readyz` says `retyc webdav serve is not running` or `gave up`
 
-The supervised WebDAV server exits at start and is restarted every five seconds. The error includes its last output
-line:
+The supervised WebDAV server exits at start. The supervisor restarts it with a backoff from 5 s to 5 min, and the error
+says when the next attempt is (`restarting in ...`). When the server exits with code `77` (login needs a new token) or
+`78` (key passphrase missing or wrong) three times in a row, the supervisor gives up: the error reads
+`retyc webdav serve gave up after N consecutive exits, last with code 77 (...)` and nothing is retried until the
+credentials change. The error includes the server's last output line:
 
 | Last output | Cause |
 |-------------|-------|
@@ -32,7 +35,8 @@ The server process is alive but not serving:
   unlocking the key, which takes a few seconds (scrypt). If it lasts, the last output line in the message says where
   it is stuck;
 - `not ready: HTTP 503`: it is shutting down, usually because its login expired. It exits, and the supervisor
-  restarts it five seconds later; a restart that ends in `retyc webdav serve is not running` is a token problem (above).
+  restarts it five seconds later; a restart that ends in `retyc webdav serve is not running` or `gave up` is a token
+  problem (above).
 
 ## Controller pod is `1/2`
 

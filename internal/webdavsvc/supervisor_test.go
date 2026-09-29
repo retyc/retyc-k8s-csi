@@ -155,3 +155,140 @@ func TestSupervisor_WaitReadyWaitsForReadyz(t *testing.T) {
 		t.Fatalf("WaitReady once /readyz turns 200: %v", err)
 	}
 }
+
+func TestRestartDelay(t *testing.T) {
+	tests := []struct {
+		failures int
+		want     time.Duration
+	}{
+		{1, 5 * time.Second},
+		{2, 10 * time.Second},
+		{3, 20 * time.Second},
+		{6, 160 * time.Second},
+		{7, 5 * time.Minute},
+		{1000, 5 * time.Minute},
+	}
+	for _, tt := range tests {
+		if got := restartDelay(5*time.Second, 5*time.Minute, tt.failures); got != tt.want {
+			t.Errorf("restartDelay after %d failures = %s, want %s", tt.failures, got, tt.want)
+		}
+	}
+}
+
+// countingBinary is a fake `retyc webdav serve` that appends a line to a file on every start, then
+// runs script. starts reads the count back.
+func countingBinary(t *testing.T, script string) (bin string, starts func() int) {
+	t.Helper()
+	countFile := t.TempDir() + "/starts"
+	bin = fakeBinary(t, `echo start >> `+countFile+"\n"+`n=$(wc -l < `+countFile+")\n"+script)
+
+	return bin, func() int {
+		b, _ := os.ReadFile(countFile) //nolint:gosec // G304: a t.TempDir() fixture
+
+		return strings.Count(string(b), "start")
+	}
+}
+
+// A revoked token (exit 77) is retried MaxFatalExits times, then the supervisor stops restarting
+// and reports why, without WaitReady waiting for its deadline.
+func TestSupervisor_GivesUpOnFatalExitCode(t *testing.T) {
+	bin, starts := countingBinary(t, `echo "not authenticated, run retyc auth login: no stored token" >&2; exit 77`)
+	s := &Supervisor{BinPath: bin, Addr: "127.0.0.1", Port: 1, MetricsPort: 1, RestartBackoff: 10 * time.Millisecond}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { s.Run(ctx); close(done) }()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run must return once it gave up")
+	}
+	st := s.Status()
+	if !st.GaveUp || st.LastExitCode != exitAuthRequired || starts() != defaultMaxFatalExits {
+		t.Fatalf("after giving up: status %+v, %d starts", st, starts())
+	}
+
+	err := s.Healthy(ctx)
+	if err == nil || !strings.Contains(err.Error(), "gave up") || !strings.Contains(err.Error(), "code 77") ||
+		!strings.Contains(err.Error(), "no stored token") {
+		t.Fatalf("Healthy after giving up: %v", err)
+	}
+	start := time.Now()
+	wait, cancelWait := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelWait()
+	if err := s.WaitReady(wait); err == nil || !strings.Contains(err.Error(), "gave up") ||
+		time.Since(start) > time.Second {
+		t.Fatalf("WaitReady after giving up must fail at once: %v after %s", err, time.Since(start))
+	}
+}
+
+// Exit 1 may be transient (API unreachable): never give up, only back off.
+func TestSupervisor_KeepsRestartingOnGenericExit(t *testing.T) {
+	bin, starts := countingBinary(t, `exit 1`)
+	s := &Supervisor{BinPath: bin, Addr: "127.0.0.1", Port: 1, RestartBackoff: time.Millisecond,
+		MaxRestartBackoff: 5 * time.Millisecond}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.Run(ctx)
+
+	waitFor(t, "restarts past the fatal limit", func() bool { return starts() > 2*defaultMaxFatalExits })
+	if st := s.Status(); st.GaveUp || st.LastExitCode != 1 {
+		t.Fatalf("status after generic exits: %+v", st)
+	}
+}
+
+// Only consecutive fatal exits count: a transient failure in between starts the count over.
+func TestSupervisor_FatalExitsMustBeConsecutive(t *testing.T) {
+	// Starts 1, 2: 77; start 3: 1; then 77 for good.
+	bin, starts := countingBinary(t, `[ "$n" -eq 3 ] && exit 1; exit 77`)
+	s := &Supervisor{BinPath: bin, Addr: "127.0.0.1", Port: 1, RestartBackoff: time.Millisecond}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { s.Run(ctx); close(done) }()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run must give up")
+	}
+	if got := starts(); got != 3+defaultMaxFatalExits {
+		t.Fatalf("gave up after %d starts, want %d", got, 3+defaultMaxFatalExits)
+	}
+}
+
+// A child that lived past StableAfter restarts after the base backoff, whatever came before.
+func TestSupervisor_StableRunResetsBackoff(t *testing.T) {
+	bin, starts := countingBinary(t, `sleep 0.2; exit 1`)
+	s := &Supervisor{BinPath: bin, Addr: "127.0.0.1", Port: 1, RestartBackoff: time.Millisecond,
+		StableAfter: 50 * time.Millisecond}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.Run(ctx)
+
+	waitFor(t, "a few restarts", func() bool { return starts() >= 3 })
+	if st := s.Status(); st.ConsecutiveFailures > 1 {
+		t.Fatalf("exits after a stable run must not pile up: %+v", st)
+	}
+}
+
+// Cancelling ctx during a long backoff stops Run at once.
+func TestSupervisor_CancelDuringBackoff(t *testing.T) {
+	s := &Supervisor{BinPath: fakeBinary(t, `exit 1`), Addr: "127.0.0.1", Port: 1, RestartBackoff: time.Hour,
+		MaxRestartBackoff: time.Hour}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { s.Run(ctx); close(done) }()
+
+	waitFor(t, "first exit", func() bool { return s.Status().ConsecutiveFailures >= 1 })
+	if err := s.Healthy(ctx); err == nil || !strings.Contains(err.Error(), "restarting in 1h") {
+		t.Fatalf("Healthy during backoff must say when the next start is: %v", err)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Run must return when ctx is cancelled during a backoff")
+	}
+}

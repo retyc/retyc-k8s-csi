@@ -94,9 +94,14 @@ WebDAV port serves, and `503` as soon as the server shuts down (signal, expired 
 server's `/metrics`, which the node plugin merges, labeled with the identity key and the tenant's namespace, into its own `/metrics`
 (see [configuration.md](configuration.md#metrics)).
 
-The supervisor restarts a server five seconds after any exit and keeps its last output line, which is what `/readyz`
-reports when a server is down (for instance `key passphrase check failed: wrong key passphrase`), prefixed by the
-identity's key.
+The supervisor restarts a server after it exits, with an exponential backoff: 5 s, then 10 s, 20 s... up to 5 min,
+plus up to 10% of jitter. The backoff starts over once the server was seen serving, or when it had run for a minute
+before exiting. Exit codes `77` (login needs a new token: missing, expired or revoked) and `78` (key passphrase missing
+or wrong) mean the same credentials will fail again: after three such exits in a row the supervisor gives up on the
+server, which stays down until its credentials change (a new identity key, hence a new server) or the node plugin
+restarts. Any other exit code, `1` included, may be transient (Retyc API or identity provider unreachable) and is
+retried forever. The supervisor keeps the server's last output line, which is what `/readyz` reports when a server is
+down (for instance `key passphrase check failed: wrong key passphrase`), prefixed by the identity's key.
 
 `davfs2` is configured for a non-interactive, multi-client mount (`/etc/davfs2/davfs2.conf` in the image):
 
@@ -140,10 +145,10 @@ tenant identities expected per node.
 
 | Event | Effect | Recovery |
 |-------|--------|----------|
-| `retyc webdav serve` exits | node `/readyz` fails, new mounts wait up to 30 s then fail `Unavailable`; existing mounts recover on the next access | automatic, supervisor restart every 5 s |
+| `retyc webdav serve` exits | node `/readyz` fails, new mounts wait up to 30 s then fail `Unavailable`; existing mounts recover on the next access | automatic, supervisor restart with a backoff from 5 s to 5 min |
 | Node plugin pod restarts | every davfs2 mount on the node breaks (`Transport endpoint is not connected`) | reschedule the pods; stale mounts are cleaned up at the next stage/unstage |
-| Wrong token or passphrase (default identity) | node and controller pods go `1/2` NotReady with the reason on `/readyz`; a controller rollout keeps the previous pod | fix the Secret, restart the DaemonSet/Deployment |
-| Wrong token or passphrase (tenant Secret) | that tenant's claims fail to provision or stage; the node pod goes `1/2` while its server crash-loops, other tenants keep working | fix the tenant's Secret; kubelet retries |
+| Wrong token or passphrase (default identity) | node and controller pods go `1/2` NotReady with the reason on `/readyz`; the supervisor gives up after three attempts; a controller rollout keeps the previous pod | fix the Secret, restart the DaemonSet/Deployment |
+| Wrong token or passphrase (tenant Secret) | that tenant's claims fail to provision or stage; the node pod goes `1/2` while its server is down, other tenants keep working | fix the tenant's Secret; kubelet retries |
 | Tenant Secret deleted before its claims | `DeleteVolume` cannot authenticate (with a `Delete` class); `Retain` classes are unaffected | recreate the Secret, or delete the PV by hand |
 | Volume mounted within 60 s of its creation | `mount.davfs` gets `404 Not Found` while the server's dataroom-title cache is stale | automatic, kubelet retries until the cache expires |
 | Retyc API unreachable | `CreateVolume`/`DeleteVolume` fail and are retried by the provisioner; reads of uncached files fail | automatic |
