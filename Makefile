@@ -86,11 +86,13 @@ vm-secret:
 	@printf 'RETYC_TOKEN=%s\nRETYC_KEY_PASSPHRASE=%s\n' "$$RETYC_TOKEN" "$$RETYC_KEY_PASSPHRASE" | \
 	  vagrant ssh -c "kubectl -n kube-system create secret generic retyc-csi-credentials --from-env-file=/dev/stdin --dry-run=client -o yaml | kubectl apply -f -"
 
-## Install or upgrade the chart in the VM against the Secret created by vm-secret (Helm is
-## provisioned with the VM). Typical loop: make image vm-load vm-helm vm-restart
+## Install or upgrade the chart in the VM with examples/vagrant-values.yaml: the :dev image, the
+## Secret created by vm-secret, traces to the provisioned Jaeger (Helm is provisioned with the VM).
+## Typical loop: make image vm-load vm-helm vm-restart
+VM_VALUES ?= examples/vagrant-values.yaml
 vm-helm:
 	vagrant rsync
-	vagrant ssh -c "helm upgrade --install retyc-csi /vagrant/$(CHART) -n kube-system --set image.tag=dev --set credentials.existingSecret=retyc-csi-credentials --wait --timeout 5m"
+	vagrant ssh -c "helm upgrade --install retyc-csi /vagrant/$(CHART) -n kube-system -f /vagrant/$(VM_VALUES) --wait --timeout 5m"
 
 ## Restart controller + node plugin so they pick up a freshly loaded :dev image (IfNotPresent +
 ## unchanged tag = no rollout on its own), and wait for both. Typical loop: make image vm-load vm-restart

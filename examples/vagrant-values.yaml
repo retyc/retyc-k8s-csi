@@ -1,0 +1,25 @@
+image:
+  tag: dev
+
+credentials:
+  existingSecret: 'retyc-csi-credentials'
+
+# The retyc CLI inherits the driver's environment and exports its traces over OTLP as soon as an
+# endpoint is set: to the Jaeger the Vagrantfile provisions (UI on http://localhost:18081).
+controller:
+  extraEnv:
+    - name: OTEL_EXPORTER_OTLP_ENDPOINT
+      value: 'http://jaeger.jaeger.svc.cluster.local:4318'
+    - name: OTEL_SERVICE_NAME
+      value: 'retyc-csi-controller'
+
+node:
+  extraEnv:
+    - name: OTEL_EXPORTER_OTLP_ENDPOINT
+      value: 'http://jaeger.jaeger.svc.cluster.local:4318'
+    - name: OTEL_SERVICE_NAME
+      value: 'retyc-csi-node'
+    - name: RETYC_API_CONCURRENCY_UPLOAD
+      value: '8'
+    - name: RETYC_API_CONCURRENCY_DOWNLOAD
+      value: '8'
