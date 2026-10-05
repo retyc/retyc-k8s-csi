@@ -1,0 +1,138 @@
+# PrivateBin (https://github.com/PrivateBin/docker-nginx-fpm-alpine), two replicas sharing one RWX
+# claim. Its Filesystem storage keeps one small file per paste plus a server salt and the traffic
+# limiter state under /srv/data, no database: a paste created through one replica is readable
+# through the other. Apply and browse the ingress controller's address (k3s ships Traefik): the
+# rule has no host, so it catches every request.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: privatebin
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: privatebin-data
+  namespace: privatebin
+  labels:
+    app: privatebin
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: retyc-rwx
+  resources:
+    requests:
+      storage: 1Gi
+---
+# Headless service governing the StatefulSet's pod identities.
+apiVersion: v1
+kind: Service
+metadata:
+  name: privatebin-headless
+  namespace: privatebin
+  labels:
+    app: privatebin
+spec:
+  clusterIP: None
+  ports:
+    - port: 8080
+      name: http
+  selector:
+    app: privatebin
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: privatebin
+  namespace: privatebin
+  labels:
+    app: privatebin
+spec:
+  ports:
+    - port: 80
+      targetPort: http
+      name: http
+  selector:
+    app: privatebin
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: privatebin
+  namespace: privatebin
+  labels:
+    app: privatebin
+spec:
+  serviceName: privatebin-headless
+  replicas: 2
+  # Replicas are interchangeable, no need to start them one after the other.
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: privatebin
+  template:
+    metadata:
+      labels:
+        app: privatebin
+    spec:
+      automountServiceAccountToken: false
+      # No fsGroup: the driver declares fsGroupPolicy None, the davfs2 mount is world-writable
+      # (dir_mode=0777, file_mode=0666) and rejects chown anyway.
+      securityContext:
+        runAsUser: 65534
+        runAsGroup: 82
+      containers:
+        - name: privatebin
+          image: ghcr.io/privatebin/fs:2.0.6
+          ports:
+            - containerPort: 8080
+              name: http
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+          volumeMounts:
+            - name: data
+              mountPath: /srv/data
+            # The only other writable paths with a read-only root filesystem.
+            - name: tmp
+              mountPath: /tmp
+            - name: run
+              mountPath: /run
+            - name: nginx-tmp
+              mountPath: /var/lib/nginx/tmp
+      # Every replica mounts the same claim: no volumeClaimTemplates on purpose.
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: privatebin-data
+        - name: tmp
+          emptyDir:
+            medium: Memory
+        - name: run
+          emptyDir:
+            medium: Memory
+        - name: nginx-tmp
+          emptyDir: {}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: privatebin
+  namespace: privatebin
+  labels:
+    app: privatebin
+spec:
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: privatebin
+                port:
+                  name: http
