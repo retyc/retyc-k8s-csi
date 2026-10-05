@@ -4,6 +4,7 @@ IMAGE        ?= ghcr.io/retyc/retyc-k8s-csi:dev
 VERSION      ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 REVISION     := $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
 CREATED      := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+EPOCH        := $(shell date -u +%s)
 LDFLAGS      := -s -w -X $(MODULE)/internal/driver.DriverVersion=$(VERSION)
 
 CHART        := charts/retyc-csi
@@ -38,8 +39,8 @@ clean:
 ## `make image RETYC_CLI_VERSION=v1.3.0` overrides it for a one-off build, `VERSION=v1.0.0` the
 ## image version.
 image:
-	docker build --pull \
-	  $(if $(RETYC_CLI_VERSION),--build-arg RETYC_CLI_VERSION=$(RETYC_CLI_VERSION)) \
+	docker build \
+	  $(if $(RETYC_CLI_VERSION),--no-cache --build-arg RETYC_CLI_VERSION=$(RETYC_CLI_VERSION) --build-arg SOURCE_DATE_EPOCH=0) \
 	  --build-arg VERSION=$(VERSION) --build-arg REVISION=$(REVISION) --build-arg CREATED=$(CREATED) \
 	  -t $(IMAGE) .
 
