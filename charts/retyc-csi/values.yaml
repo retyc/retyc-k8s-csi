@@ -129,7 +129,7 @@ metrics:
 logLevel: 2
 
 probes:
-  # Liveness is deliberately lenient: restarting the node plugin breaks every mount on that node,
+  # Liveness is deliberately lenient: restarting the node plugin interrupts every mount on that node,
   # so only a driver that stopped serving HTTP altogether should trip it. Readiness carries the
   # real diagnosis and only flips the pod to NotReady.
   liveness:
@@ -227,7 +227,8 @@ node:
   updateStrategy:
     type: RollingUpdate
     rollingUpdate:
-      # Each node plugin restart breaks the mounts on that node: one node at a time.
+      # Each node plugin restart interrupts the mounts on that node until it has remounted them: one
+      # node at a time (the plugin is not Ready before its volumes are back).
       maxUnavailable: 1
   registrar:
     image:

@@ -31,8 +31,10 @@ Without either, the driver runs with no cluster-wide identity and only serves St
 `tenantSecretName` (per-namespace identities).
 
 The chart installs the `CSIDriver`, RBAC, the controller `Deployment`, the node `DaemonSet` and three StorageClasses
-(`retyc-rwx`, `retyc-rwx-retain`, `retyc-rwx-tenant`). Restarting the node plugin breaks the mounts on that node, so the
-DaemonSet rolls one node at a time; plan upgrades like node drains.
+(`retyc-rwx`, `retyc-rwx-retain`, `retyc-rwx-tenant`). Restarting the node plugin interrupts the mounts on that node: it
+remounts them before turning Ready, but writes in flight are lost, so the DaemonSet rolls one node at a time. Pods
+should mount the claims with `mountPropagation: HostToContainer` to see their volume come back without a restart (see
+[doc/architecture.md](../../doc/architecture.md#recovery)).
 
 ## Values
 

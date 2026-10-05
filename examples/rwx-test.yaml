@@ -23,6 +23,8 @@ spec:
       volumeMounts:
         - name: data
           mountPath: /data
+          # Lets the pod see the volume again when the node plugin restarts (doc/architecture.md).
+          mountPropagation: HostToContainer
   volumes:
     - name: data
       persistentVolumeClaim:
@@ -42,6 +44,8 @@ spec:
       volumeMounts:
         - name: data
           mountPath: /data
+          # Lets the pod see the volume again when the node plugin restarts (doc/architecture.md).
+          mountPropagation: HostToContainer
   volumes:
     - name: data
       persistentVolumeClaim:

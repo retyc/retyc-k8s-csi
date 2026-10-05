@@ -4,12 +4,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"net"
 	"os"
 	"os/signal"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -40,6 +42,9 @@ func main() {
 			"first port for the supervised 'retyc webdav serve' servers, one per identity (node mode only)")
 		stateDir = flag.String("state-dir", "/var/lib/retyc-csi",
 			"directory for per-identity retyc state (node mode only)")
+		stageDir = flag.String("stage-dir", "/csi/staged",
+			"host directory where the node plugin records staged volumes, to remount them after a restart; "+
+				"empty disables the recovery (node mode only)")
 		httpEndpoint = flag.String("http-endpoint", ":9808",
 			"address for the /healthz (liveness), /readyz (readiness) and /metrics HTTP endpoints; empty disables them")
 	)
@@ -48,7 +53,8 @@ func main() {
 
 	opts := options{
 		mode: *mode, endpoint: *endpoint, retycBin: *retycBin, nodeID: *nodeID,
-		webdavAddr: *webdavAddr, webdavPort: *webdavPort, stateDir: *stateDir, httpEndpoint: *httpEndpoint,
+		webdavAddr: *webdavAddr, webdavPort: *webdavPort, stateDir: *stateDir, stageDir: *stageDir,
+		httpEndpoint: *httpEndpoint,
 	}
 	if err := run(opts); err != nil {
 		klog.Fatal(err)
@@ -56,8 +62,8 @@ func main() {
 }
 
 type options struct {
-	mode, endpoint, retycBin, nodeID, webdavAddr, stateDir, httpEndpoint string
-	webdavPort                                                           int
+	mode, endpoint, retycBin, nodeID, webdavAddr, stateDir, stageDir, httpEndpoint string
+	webdavPort                                                                     int
 }
 
 // authStatusCacheTTL bounds how often the controller's readiness re-runs `retyc auth status`
@@ -70,6 +76,13 @@ func run(o options) error {
 
 	server := grpc.NewServer()
 	var ready health.Checker
+	// Node mode only: remounting the volumes a previous node plugin staged.
+	var (
+		recoverStaged func(context.Context)
+		watchStaged   func(context.Context, time.Duration)
+		recovering    atomic.Bool
+	)
+	recovering.Store(true)
 	registry := prometheus.NewRegistry()
 	registry.MustRegister(
 		collectors.NewGoCollector(),
@@ -121,11 +134,25 @@ func run(o options) error {
 		ready = pool.Healthy
 		gatherers = append(gatherers, pool)
 
-		csi.RegisterNodeServer(server, &driver.NodeServer{
+		node := &driver.NodeServer{
 			NodeID:  nodeID,
 			Mounter: mount.New(mount.DefaultDavfsOptions),
 			Webdav:  pool,
-		})
+		}
+		if o.stageDir != "" {
+			node.Stages = &driver.StageStore{Dir: o.stageDir}
+			recoverStaged, watchStaged = node.Recover, node.Watch
+			// Not ready until the volumes staged before a restart are remounted, so that a rollout
+			// waits for them before moving on to the next node.
+			ready = func(ctx context.Context) error {
+				if recovering.Load() {
+					return errors.New("remounting the volumes staged before the restart")
+				}
+
+				return pool.Healthy(ctx)
+			}
+		}
+		csi.RegisterNodeServer(server, node)
 	default:
 		return fmt.Errorf("--mode must be \"controller\" or \"node\", got %q", o.mode)
 	}
@@ -146,6 +173,16 @@ func run(o options) error {
 				klog.Errorf("HTTP endpoints: %v", err)
 			}
 		}()
+	}
+
+	// After the probes are up, since it can take a while, and before the CSI socket: kubelet's
+	// first calls (an unstage, a new pod) must find the recovered mounts and server references.
+	if recoverStaged != nil {
+		recoverStaged(ctx)
+		recovering.Store(false)
+	}
+	if watchStaged != nil {
+		go watchStaged(ctx, driver.RecoverInterval)
 	}
 
 	listener, err := listen(o.endpoint)
