@@ -1,5 +1,6 @@
 image:
   tag: dev
+  imagePullPolicy: "always"
 
 credentials:
   existingSecret: 'retyc-csi-credentials'
@@ -23,3 +24,5 @@ node:
       value: '8'
     - name: RETYC_API_CONCURRENCY_DOWNLOAD
       value: '8'
+    - name: RETYC_API_UNSAFE_WRITE
+      value: 'true'
