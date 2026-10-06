@@ -67,10 +67,20 @@ listing is unknown to it until the cache expires. kubelet's retries succeed with
 
 ## `Transport endpoint is not connected` inside a pod
 
-The node plugin restarted on that node (upgrade, OOM kill, crash) and took the FUSE daemons with it. Reschedule the
-affected pods; the driver removes the stale mounts when it stages or unstages next. Check `kubectl -n kube-system get
-pods -l app=retyc-csi-node -o wide` for `RESTARTS` and, if the cause is an OOM kill, the memory limit
-(see [configuration.md](configuration.md#probes-and-resources)).
+The node plugin restarted on that node (upgrade, OOM kill, crash) and took the FUSE daemons with it, or a `mount.davfs`
+daemon died alone. The plugin remounts the volume at startup, then checks every 30 s
+(see [architecture.md](architecture.md#recovery)); its log shows `recovery: remounting ...` and `recovery: rebinding
+...`, or why it failed.
+
+- The error lasts only while the plugin restarts: nothing to do.
+- It persists in a pod while the plugin logged `rebinding` for it: the pod does not mount the volume with
+  `mountPropagation: HostToContainer`. Restart its container, and add the setting or, where a policy forbids it, a
+  liveness probe that writes to the volume (see [architecture.md](architecture.md#recovery)).
+- It persists and the plugin logs `no stage record`: the volume was staged by a driver version that did not record
+  it. Reschedule the pods using it on that node once.
+
+Check `kubectl -n kube-system get pods -l app=retyc-csi-node -o wide` for `RESTARTS` and, if the cause is an OOM kill,
+the memory limit (see [configuration.md](configuration.md#probes-and-resources)).
 
 ## `mount.davfs: can't access file /etc/mtab`
 

@@ -71,6 +71,11 @@ Use `accessModes: [ReadWriteMany]` and one of the storage classes:
 - `retyc-rwx-tenant`: same, with the credentials of a `retyc-credentials` Secret in the claim's namespace instead of
   the cluster-wide ones (see [doc/configuration.md](doc/configuration.md#per-tenant-identities)).
 
+Mount it with `mountPropagation: HostToContainer`, as in the examples: when the node plugin restarts, the pod then
+sees its volume come back without restarting. The setting is unprivileged and scoped to the claim; where a policy
+forbids it, a liveness probe that writes to the volume restarts the container onto the remounted volume instead (see
+[doc/architecture.md](doc/architecture.md#recovery)).
+
 Every pod mounting the claim, on any node, shares the same dataroom. It behaves like a network drive: writes made on
 one node show up on the others a few seconds later, and concurrent writes to one file are not safe. Good for
 documents, configuration and artefacts; not for databases.

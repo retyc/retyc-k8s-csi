@@ -7,7 +7,11 @@ package mount
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 
+	"k8s.io/klog/v2"
 	mountutils "k8s.io/mount-utils"
 )
 
@@ -69,6 +73,7 @@ func (m *Mounter) MountDavfs(url, target string) error {
 	if err := os.MkdirAll(target, 0750); err != nil {
 		return fmt.Errorf("creating staging dir %s: %w", target, err)
 	}
+	removeStalePIDFile(target)
 
 	// No davfs2 credentials: --auth is deliberately off on the loopback webdav server (see
 	// internal/webdavsvc), and /etc/davfs2/davfs2.conf sets ask_auth=0 so mount.davfs never
@@ -125,16 +130,68 @@ func (m *Mounter) Unpublish(target string) error {
 	return m.unmount(target)
 }
 
-// unmount unmounts target (if mounted, corrupted or not) and removes the directory.
+// State reports whether target is a mount point, and whether its FUSE daemon is gone.
+func (m *Mounter) State(target string) (mounted, corrupted bool, err error) {
+	return m.mountState(target)
+}
+
+// maxStackedMounts bounds unmount's loop. Recover stacks a fresh bind mount on top of a dead one
+// at each node plugin restart, so a pod's target path can hold a few layers.
+const maxStackedMounts = 16
+
+// unmount unmounts every layer mounted on target (corrupted or not) and removes the directory.
 func (m *Mounter) unmount(target string) error {
-	mounted, _, err := m.mountState(target)
-	if err != nil {
-		return fmt.Errorf("checking mount state of %s: %w", target, err)
-	}
-	if !mounted {
-		return nil
+	for i := range maxStackedMounts {
+		mounted, _, err := m.mountState(target)
+		if err != nil {
+			return fmt.Errorf("checking mount state of %s: %w", target, err)
+		}
+		if !mounted {
+			if i == 0 {
+				return nil
+			}
+			if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("removing %s: %w", target, err)
+			}
+
+			return nil
+		}
+		if err := m.iface.Unmount(target); err != nil {
+			return err
+		}
 	}
 
-	// CleanupMountPoint itself copes with corrupted mounts (it unmounts on IsCorruptedMnt).
-	return mountutils.CleanupMountPoint(target, m.iface, true)
+	return fmt.Errorf("%s is still mounted after %d unmounts", target, maxStackedMounts)
+}
+
+// davfsPIDDir is where mount.davfs keeps one PID file per mount point (davfs2's default).
+const davfsPIDDir = "/var/run/mount.davfs"
+
+// removeStalePIDFile removes target's davfs2 PID file when its process is gone. mount.davfs
+// refuses to mount over a PID file left by a daemon that was killed (OOM) instead of unmounted.
+func removeStalePIDFile(target string) {
+	name := filepath.Join(davfsPIDDir, strings.ReplaceAll(strings.TrimPrefix(target, "/"), "/", "-")+".pid")
+	data, err := os.ReadFile(name) //nolint:gosec // G304: a path under davfsPIDDir
+	if err != nil {
+		return
+	}
+	if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && pid > 0 && processAlive(pid) {
+		return
+	}
+	if err := os.Remove(name); err == nil {
+		klog.Infof("removed the stale davfs2 PID file %s", name)
+	}
+}
+
+// processAlive reports whether pid runs and is not a zombie: a daemon killed while its parent
+// does not reap it (no init in the container) keeps its /proc entry.
+func processAlive(pid int) bool {
+	stat, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "stat"))
+	if err != nil {
+		return false
+	}
+	// "pid (comm) state ...": comm may contain spaces and parentheses, the state follows the last ')'.
+	i := strings.LastIndexByte(string(stat), ')')
+
+	return i < 0 || i+2 >= len(stat) || stat[i+2] != 'Z'
 }

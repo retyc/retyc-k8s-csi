@@ -69,12 +69,13 @@ fixed name in a keyring they all share.
 2. **Staging.** When a pod using the claim lands on a node, kubelet calls `NodeStageVolume`. The plugin picks the
    WebDAV server of the volume's identity (starting it if needed), waits for it (bounded, 30 s), then runs
    `mount -t davfs -o dir_mode=0777,file_mode=0666 http://127.0.0.1:<port>/dataroom/<title> <globalmount>`.
-   One davfs2 mount per volume per node, whatever the number of pods.
+   One davfs2 mount per volume per node, whatever the number of pods. The plugin then records the volume on the
+   host (see [Recovery](#recovery)).
 3. **Publishing.** `NodePublishVolume` bind-mounts the staging path into the pod's volume directory. With
    `mountPropagation: Bidirectional` on the kubelet directories, the mount made inside the plugin container is visible
    to kubelet and to the pod.
 4. **Unpublish / unstage.** The bind mount is removed when the pod goes away; the davfs2 mount when the last pod on the
-   node has left. A stale mount (`ENOTCONN` after a plugin restart) is cleaned up here.
+   node has left, along with its record. Mounts that recovery stacked on a target path are all removed.
 5. **Deletion.** With `reclaimPolicy: Delete`, deleting the PVC makes the provisioner call `DeleteVolume`, i.e.
    `retyc dataroom rm retyc://<id> -y`. A dataroom already gone is treated as success. With `Retain`, the PV is
    released and the dataroom kept; `examples/static-pv.yaml` shows how to adopt it again.
@@ -146,12 +147,58 @@ tenant identities expected per node.
 | Event | Effect | Recovery |
 |-------|--------|----------|
 | `retyc webdav serve` exits | node `/readyz` fails, new mounts wait up to 30 s then fail `Unavailable`; existing mounts recover on the next access | automatic, supervisor restart with a backoff from 5 s to 5 min |
-| Node plugin pod restarts | every davfs2 mount on the node breaks (`Transport endpoint is not connected`) | reschedule the pods; stale mounts are cleaned up at the next stage/unstage |
+| Node plugin pod restarts | every davfs2 mount on the node dies with the container; writes in flight are lost | automatic at startup (see [Recovery](#recovery)); pods without `mountPropagation: HostToContainer` need a container restart |
+| A `mount.davfs` daemon dies (OOM kill) | that volume answers `Transport endpoint is not connected` on the node | automatic within 30 s, or at the next `NodePublishVolume` of the volume on the node |
 | Wrong token or passphrase (default identity) | node and controller pods go `1/2` NotReady with the reason on `/readyz`; the supervisor gives up after three attempts; a controller rollout keeps the previous pod | fix the Secret, restart the DaemonSet/Deployment |
 | Wrong token or passphrase (tenant Secret) | that tenant's claims fail to provision or stage; the node pod goes `1/2` while its server is down, other tenants keep working | fix the tenant's Secret; kubelet retries |
 | Tenant Secret deleted before its claims | `DeleteVolume` cannot authenticate (with a `Delete` class); `Retain` classes are unaffected | recreate the Secret, or delete the PV by hand |
 | Volume mounted within 60 s of its creation | `mount.davfs` gets `404 Not Found` while the server's dataroom-title cache is stale | automatic, kubelet retries until the cache expires |
 | Retyc API unreachable | `CreateVolume`/`DeleteVolume` fail and are retried by the provisioner; reads of uncached files fail | automatic |
+
+## Recovery
+
+The davfs2 daemons run in the node plugin container, so a restart of the plugin kills every mount on the node, and
+kubelet never calls `NodeStageVolume` or `NodePublishVolume` again for a volume it considers staged. The plugin
+repairs those mounts itself:
+
+1. `NodeStageVolume` writes a record per staging path under `--stage-dir` (`/csi/staged`, i.e.
+   `<kubeletDir>/plugins/csi.retyc.com/staged` on the host): dataroom title, claim namespace, the major:minor of the
+   davfs2 mount and, for a tenant volume, the tenant's credentials. `NodeUnstageVolume` deletes it.
+2. At startup, before it opens the CSI socket and while `/readyz` reports `remounting the volumes staged before the
+   restart`, the plugin goes through the records: for each staging path whose mount is dead, it waits for the WebDAV
+   server of the volume's identity, mounts the dataroom again, and **stacks** a bind mount of the new mount on every
+   pod target path still bound to the dead one (found in `/proc/self/mountinfo` by device and source). A DaemonSet
+   rollout therefore waits for a node's volumes to be back before moving on to the next node.
+3. The same pass runs every 30 s, for a `mount.davfs` killed while the plugin keeps running, and `NodePublishVolume`
+   runs it for its volume when a new pod lands on a node whose staging mount is dead.
+
+Stacking rather than replacing is what reaches running pods: a container's mount of the volume is a copy of the target
+path's mount, and a mount stacked on the target propagates into that copy when the pod mounts the volume with
+`mountPropagation: HostToContainer`, as the examples do. The stacked layers are all unmounted by
+`NodeUnpublishVolume`.
+
+`HostToContainer` is recommended, not required. It is Linux `rslave` propagation: mounts made on the host under the
+volume's target path show up in the container, nothing propagates back. It needs neither `privileged` nor any
+capability (only `Bidirectional` does), and its scope is the claim's own mount point, where only the node plugin,
+already privileged, mounts anything: the pod gains no access to the host. Policies that reject any `mountPropagation`
+other than `None` usually target `Bidirectional`, or `hostPath` volumes, where it would expose host mounts. Where it is
+not allowed anyway, the pod keeps the dead mount until its container restarts and picks up the new one then: give it
+a liveness probe that writes to the volume, for instance
+
+```yaml
+livenessProbe:
+  exec:
+    command: ["sh", "-c", "touch /data/.liveness"]
+  periodSeconds: 30
+  timeoutSeconds: 10
+  failureThreshold: 2
+```
+
+Recovery does not save data: what a pod was writing when the daemon died, and what davfs2 had not uploaded yet, is lost.
+Volumes staged by a driver version without records are not recovered: reschedule their pods once.
+
+The image runs the driver under `tini`, which reaps the detached `mount.davfs` daemons; a killed daemon left as a
+zombie would keep its PID file, and `mount.davfs` refuses to mount over it.
 
 ## Security
 
@@ -159,7 +206,9 @@ tenant identities expected per node.
   post-quantum hybrid keys by `retyc-cli`, before anything leaves the node. Retyc servers only ever see ciphertext.
 - **Identity**: a Retyc account per cluster (the driver's `Secret`) or per namespace (`retyc-rwx-tenant`, resolved by
   kubelet and the provisioner from the claim's namespace). Tokens and passphrases only ever live in those Secrets and in
-  the environment of the `retyc` processes; each identity's WebDAV server runs with its own state directory.
+  the environment of the `retyc` processes, plus, for each tenant volume staged on a node, its
+  [recovery](#recovery) record (`0600`, root, under `<kubeletDir>/plugins/csi.retyc.com/staged`, deleted at unstage);
+  each identity's WebDAV server runs with its own state directory.
 - **Trust boundary**: the WebDAV server listens on loopback inside the node plugin's own network namespace, and only the
   `davfs2` mount in that same container talks to it. It is unreachable from pods and from the node.
 - **Pod access**: mounts are world-writable (`dir_mode=0777,file_mode=0666`) so that non-root pods can write - Kubernetes
@@ -170,9 +219,10 @@ tenant identities expected per node.
 
 - **No resize, no snapshots, no capacity enforcement.** Requested sizes are accepted and echoed back; Retyc does not cap
   a dataroom's size.
-- **A node plugin restart breaks the mounts on that node.** The FUSE daemons live in the plugin container. Pods see
-  `Transport endpoint is not connected` until they are rescheduled; the driver cleans the stale mounts up on the next
-  stage/unstage. Plan node plugin upgrades like a node drain.
+- **A node plugin restart interrupts the mounts on that node.** The FUSE daemons live in the plugin container. The
+  driver remounts them at startup (see [Recovery](#recovery)), but writes in flight are lost, and pods without
+  `mountPropagation: HostToContainer` only see the volume again after a container restart. Plan node plugin upgrades
+  accordingly.
 - **File modes are set at creation.** `dir_mode`/`file_mode` apply to entries discovered on the server; a file created
   through the mount keeps the mode derived from the creating pod's umask until the plugin's metadata cache is rebuilt.
 - **`CreateVolume` idempotency checks the first page of `retyc dataroom ls` only.** A retried create past that page can

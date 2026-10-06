@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/klog/v2"
+	mountutils "k8s.io/mount-utils"
 
 	"github.com/retyc/retyc-k8s-csi/internal/identity"
 	"github.com/retyc/retyc-k8s-csi/internal/mount"
@@ -26,6 +27,10 @@ type NodeServer struct {
 	NodeID  string
 	Mounter *mount.Mounter
 	Webdav  *webdavsvc.Pool
+	// Stages records the staged volumes for Recover; nil disables the recovery.
+	Stages *StageStore
+
+	locks keyLock // by staging path
 }
 
 func (s *NodeServer) NodeGetCapabilities(
@@ -93,6 +98,7 @@ func (s *NodeServer) NodeStageVolume(
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
+	defer s.locks.Lock(stagingPath)()
 	server, err := s.Webdav.Acquire(stagingPath, creds, claimNamespace(req.GetVolumeContext()))
 	if err != nil {
 		return nil, status.Error(codes.FailedPrecondition, err.Error())
@@ -117,6 +123,7 @@ func (s *NodeServer) NodeStageVolume(
 
 		return nil, status.Errorf(codes.Internal, "mounting dataroom: %v", err)
 	}
+	s.recordStage(stagingPath, title, creds, claimNamespace(req.GetVolumeContext()))
 
 	return &csi.NodeStageVolumeResponse{}, nil
 }
@@ -128,9 +135,15 @@ func (s *NodeServer) NodeUnstageVolume(
 	if stagingPath == "" {
 		return nil, status.Error(codes.InvalidArgument, "staging target path is required")
 	}
+	defer s.locks.Lock(stagingPath)()
 
 	if err := s.Mounter.UnmountDavfs(stagingPath); err != nil {
 		return nil, status.Errorf(codes.Internal, "unmounting %s: %v", stagingPath, err)
+	}
+	if s.Stages != nil {
+		if err := s.Stages.Remove(stagingPath); err != nil {
+			klog.Warningf("NodeUnstageVolume: removing the stage record of %s: %v", stagingPath, err)
+		}
 	}
 	s.Webdav.Release(stagingPath)
 
@@ -138,12 +151,17 @@ func (s *NodeServer) NodeUnstageVolume(
 }
 
 func (s *NodeServer) NodePublishVolume(
-	_ context.Context, req *csi.NodePublishVolumeRequest,
+	ctx context.Context, req *csi.NodePublishVolumeRequest,
 ) (*csi.NodePublishVolumeResponse, error) {
 	source := req.GetStagingTargetPath()
 	target := req.GetTargetPath()
 	if source == "" || target == "" {
 		return nil, status.Error(codes.InvalidArgument, "staging and target paths are required")
+	}
+	// kubelet does not stage a volume again for a new pod while another pod on the node still
+	// uses it: a dead staging mount has to be repaired here, or the pod never starts.
+	if err := s.repairStaging(ctx, source); err != nil {
+		return nil, status.Error(codes.Unavailable, err.Error())
 	}
 
 	klog.Infof("NodePublishVolume: bind-mounting %s at %s (readonly=%t)", source, target, req.GetReadonly())
@@ -167,4 +185,25 @@ func (s *NodeServer) NodeUnpublishVolume(
 	}
 
 	return &csi.NodeUnpublishVolumeResponse{}, nil
+}
+
+// recordStage saves what Recover needs to remount stagingPath. A failure only costs the
+// recovery of this volume after a plugin restart, not the mount: it is logged, not returned.
+func (s *NodeServer) recordStage(stagingPath, title string, creds *identity.Credentials, namespace string) {
+	if s.Stages == nil {
+		return
+	}
+	rec := &stageRecord{StagingPath: stagingPath, Title: title, Namespace: namespace}
+	if infos, err := mountutils.ParseMountInfo(procMountInfo); err == nil {
+		if top, ok := topMount(infos, stagingPath); ok {
+			rec.Device = device(top)
+		}
+	}
+	if creds != nil {
+		rec.Token, rec.Passphrase = creds.Token, creds.Passphrase
+	}
+	if err := s.Stages.Save(rec); err != nil {
+		klog.Warningf("NodeStageVolume: recording %s (it will not be remounted after a plugin restart): %v",
+			stagingPath, err)
+	}
 }

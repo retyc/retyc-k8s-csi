@@ -15,6 +15,7 @@ Everything below is exposed by the Helm chart (`charts/retyc-csi`); the value na
 | `--webdav-addr` | `127.0.0.1` | bind address of the supervised `retyc webdav serve` servers (node mode) |
 | `--webdav-port` | `8888` | first port; each identity's server takes the next two free ones, WebDAV and probes (node mode) |
 | `--state-dir` | `/var/lib/retyc-csi` | per-identity state of the `retyc` servers (node mode) |
+| `--stage-dir` | `/csi/staged` | host directory of the staged-volume records used to remount them after a restart; empty disables the [recovery](architecture.md#recovery) (node mode) |
 
 `klog` flags (`-v`, `--logtostderr`, ...) are accepted as well.
 
@@ -50,8 +51,8 @@ after changing it restart both components:
 kubectl -n kube-system rollout restart deploy/retyc-csi-controller ds/retyc-csi-node
 ```
 
-Restarting the node DaemonSet breaks the mounts on every node (see [architecture.md](architecture.md#failure-modes));
-schedule it accordingly. A rollout of the controller with invalid credentials never replaces the running pod, because
+Restarting the node DaemonSet interrupts the mounts on every node: the plugin remounts them, but writes in flight are
+lost (see [architecture.md](architecture.md#recovery)); schedule it accordingly. A rollout of the controller with invalid credentials never replaces the running pod, because
 the new one does not become Ready.
 
 ## StorageClasses
@@ -119,7 +120,7 @@ Both modes serve `/healthz` (liveness) and `/readyz` (readiness) on `--http-endp
   the same line is logged.
 - **Controller**: ready when `retyc auth status` reports an authenticated account (checked every two minutes).
 
-Liveness is deliberately lenient on the node: restarting the plugin breaks every mount on that node, so a bad
+Liveness is deliberately lenient on the node: restarting the plugin interrupts every mount on that node, so a bad
 credential shows up as a `1/2` NotReady pod, never as a restart loop. See [troubleshooting.md](troubleshooting.md).
 
 Both driver containers expose port `9808`:
@@ -170,9 +171,9 @@ stays empty until they are recreated. A static PV using a tenant Secret can set 
 ([`examples/static-pv.yaml`](../examples/static-pv.yaml)); a value that is not a namespace name is ignored with a
 warning.
 
-A tenant's label follows the volumes staged on the node, which the node plugin only learns at `NodeStageVolume`. After
-a node plugin restart - which breaks the tenants' mounts anyway, see [troubleshooting.md](troubleshooting.md) - their
-servers do not reappear in the metrics until a volume of that identity is staged again.
+A tenant's label follows the volumes staged on the node, which the node plugin learns at `NodeStageVolume` and, after
+a restart, from its [recovery](architecture.md#recovery) records. Volumes staged by a driver version without records
+have no tenant label until they are staged again.
 
 The node plugin scrapes its servers on loopback at each scrape of its own `/metrics` (concurrently, 3 s each, two
 scrapes of `/metrics` at most at once); a server that does not answer only loses its `retyc_cli_*` series for that

@@ -55,7 +55,7 @@ LABEL org.opencontainers.image.title="Retyc CSI Driver" \
 # not-yet-created account and skips creating it ("group davfs2 does not exist" at mount time),
 # hence the two separate installs, davfs2 first.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends davfs2 ca-certificates && \
+    apt-get install -y --no-install-recommends davfs2 ca-certificates tini && \
     apt-get install -y --no-install-recommends libnss-unknown && \
     rm -rf /var/lib/apt/lists/* && \
     # mount.davfs refuses to run without /etc/mtab ("can't access file /etc/mtab"). `docker run`
@@ -80,4 +80,7 @@ EOF
 COPY --from=retyc /retyc /usr/local/bin/retyc
 COPY --from=builder /retyc-k8s-csi /usr/local/bin/retyc-k8s-csi
 
-ENTRYPOINT ["/usr/local/bin/retyc-k8s-csi"]
+# tini as PID 1 reaps the mount.davfs daemons: they detach from the driver at mount time, so the
+# driver is not their parent, and one killed outside an unmount (OOM) would otherwise stay a
+# zombie, keeping its PID file "alive" for the remount (see internal/mount).
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/retyc-k8s-csi"]

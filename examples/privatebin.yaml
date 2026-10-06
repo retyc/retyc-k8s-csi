@@ -97,6 +97,8 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /srv/data
+              # Lets the pod see the volume again when the node plugin restarts (doc/architecture.md).
+              mountPropagation: HostToContainer
             # The only other writable paths with a read-only root filesystem.
             - name: tmp
               mountPath: /tmp

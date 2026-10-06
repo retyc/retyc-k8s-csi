@@ -247,10 +247,16 @@ kubectl exec retyc-writer -- ls -ln /data      # root's log.txt is 0644: the ker
 In the VM:
 
 ```sh
-# Node plugin restart: the FUSE daemons die with the container (documented limitation).
+# Node plugin restart: the FUSE daemons die with the container, the new plugin remounts them
+# before it turns Ready; the pods (mountPropagation: HostToContainer) see the volume again.
 kubectl -n kube-system delete pod -l app=retyc-csi-node
-kubectl exec retyc-writer -- ls /data               # expect "Transport endpoint is not connected"
-kubectl delete pod retyc-writer retyc-reader && kubectl apply -f /vagrant/examples/rwx-test.yaml   # remount recovers
+kubectl -n kube-system rollout status ds/retyc-csi-node
+kubectl exec retyc-writer -- ls /data               # works, no pod restart
+kubectl -n kube-system logs ds/retyc-csi-node -c retyc-csi-node | grep recovery:
+
+# One davfs2 daemon killed: remounted within 30 s (-x: `pkill -f` would match this shell).
+sudo pkill -9 -x mount.davfs
+sleep 35; kubectl exec retyc-writer -- ls /data
 
 # Bad credentials: `retyc webdav serve` exits within a second ("key passphrase check failed:
 # wrong key passphrase") and is restarted every 5s; the node pod goes 1/2 with that message on
