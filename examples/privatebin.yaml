@@ -22,6 +22,33 @@ spec:
     requests:
       storage: 1Gi
 ---
+# PrivateBin purges expired pastes while it handles a paste creation, at most every [purge] limit
+# seconds: it reads every paste to find the expired ones, one WebDAV round trip each, which stalls
+# that request for seconds on a cold cache. The CronJob at the end purges instead. A limit below 1
+# does not disable the purge but runs it on every creation (PurgeLimiter::canPurge): ten years it
+# is. Absent or empty sections keep PrivateBin's defaults.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: privatebin-config
+  namespace: privatebin
+  labels:
+    app: privatebin
+data:
+  conf.php: |
+    ;<?php http_response_code(403); /*
+    [main]
+
+    [model]
+    class = Filesystem
+
+    [model_options]
+
+    [purge]
+    limit = 315360000
+    batchsize = 10
+    ;*/
+---
 # Headless service governing the StatefulSet's pod identities.
 apiVersion: v1
 kind: Service
@@ -106,6 +133,9 @@ spec:
               mountPath: /run
             - name: nginx-tmp
               mountPath: /var/lib/nginx/tmp
+            - name: config
+              mountPath: /srv/cfg
+              readOnly: true
       # Every replica mounts the same claim: no volumeClaimTemplates on purpose.
       volumes:
         - name: data
@@ -119,6 +149,9 @@ spec:
             medium: Memory
         - name: nginx-tmp
           emptyDir: {}
+        - name: config
+          configMap:
+            name: privatebin-config
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -138,3 +171,56 @@ spec:
                 name: privatebin
                 port:
                   name: http
+---
+# Purges the expired pastes outside of user requests (see the ConfigMap).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: privatebin-purge
+  namespace: privatebin
+  labels:
+    app: privatebin
+spec:
+  schedule: "*/15 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app: privatebin-purge
+        spec:
+          restartPolicy: OnFailure
+          automountServiceAccountToken: false
+          securityContext:
+            runAsUser: 65534
+            runAsGroup: 82
+          containers:
+            - name: purge
+              image: ghcr.io/privatebin/fs:2.0.6
+              # The script raises PHP 8.5 deprecation notices (upstream, harmless): kept out of the logs.
+              command: ["php", "-d", "error_reporting=E_ALL & ~E_DEPRECATED", "/srv/bin/administration", "--purge"]
+              securityContext:
+                readOnlyRootFilesystem: true
+                allowPrivilegeEscalation: false
+              volumeMounts:
+                - name: data
+                  mountPath: /srv/data
+                - name: config
+                  mountPath: /srv/cfg
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: privatebin-data
+            - name: config
+              configMap:
+                name: privatebin-config
+            - name: tmp
+              emptyDir:
+                medium: Memory

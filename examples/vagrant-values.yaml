@@ -26,3 +26,7 @@ node:
       value: '8'
     - name: RETYC_API_UNSAFE_WRITE
       value: 'true'
+    - name: RETYC_WEBDAV_CACHE_TTL
+      value: '1m'
+    - name: RETYC_WEBDAV_CACHE_MAX_STALE
+      value: '10m'
