@@ -5,8 +5,8 @@ go 1.26.9
 require (
 	github.com/container-storage-interface/spec v1.11.0
 	github.com/prometheus/client_golang v1.24.1
-	github.com/prometheus/client_model v0.6.2
-	github.com/prometheus/common v0.70.1
+	github.com/prometheus/client_model v0.6.3
+	github.com/prometheus/common v0.72.0
 	golang.org/x/sys v0.49.0
 	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.12
