@@ -11,14 +11,21 @@ on:
         description: "Version string for the VERSION build-arg and the OCI labels"
         required: true
         type: string
+      push:
+        description: "Push the image; false only builds it (branches, pull requests)"
+        required: false
+        type: boolean
+        default: true
 
 jobs:
   docker:
-    name: Push image
+    name: ${{ inputs.push && 'Push image' || 'Build image' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
+      # Only for the final stage's apt-get on the foreign platform (a cached layer most of the
+      # time): the Go build cross-compiles from the build platform.
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
 
@@ -29,6 +36,9 @@ jobs:
         id: date
         run: echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
+      # Needed to push, and kept on build-only runs for the retyc-cli base image: it is public
+      # on ghcr.io, but logging in keeps the build working should the package ever go private,
+      # and lifts any anonymous rate limit.
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v4
         with:
@@ -36,7 +46,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Push only: the secrets are not available to a pull request from a fork.
       - name: Log in to Docker Hub
+        if: inputs.push
         uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -46,9 +58,9 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
-          push: true
-          provenance: mode=max,version=v1
-          sbom: true
+          push: ${{ inputs.push }}
+          provenance: ${{ inputs.push && 'mode=max,version=v1' || 'false' }}
+          sbom: ${{ inputs.push }}
           platforms: linux/amd64,linux/arm64
           tags: ${{ inputs.tags }}
           build-args: |
