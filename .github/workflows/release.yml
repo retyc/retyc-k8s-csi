@@ -17,13 +17,6 @@ jobs:
       packages: write
       id-token: write
     uses: ./.github/workflows/_docker.yml
-    with:
-      tags: |
-        ghcr.io/retyc/retyc-k8s-csi:${{ github.ref_name }}
-        ghcr.io/retyc/retyc-k8s-csi:latest
-        retyc/retyc-k8s-csi:${{ github.ref_name }}
-        retyc/retyc-k8s-csi:latest
-      version: ${{ github.ref_name }}
     secrets: inherit
 
   release:
