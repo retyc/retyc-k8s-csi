@@ -1,0 +1,15 @@
+# Only the Go sources reach the builder stage: anything else in the context would invalidate the
+# `COPY . .` layer (and the compilation after it) without changing the binary.
+.git
+.github
+.idea
+.vagrant
+.media
+charts
+doc
+examples
+dist
+retyc-k8s-csi
+Vagrantfile
+Makefile
+*.md
