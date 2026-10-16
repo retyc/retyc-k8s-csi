@@ -1,6 +1,16 @@
 # Re-adopt an existing dataroom (e.g. one left behind by a retyc-rwx-retain PVC, or created by
-# hand) as a static PV. The node plugin only needs the dataroom *title* to build the WebDAV
-# path; the ID is the CSI volume handle. Both come from `retyc --json dataroom ls`.
+# hand) as a static PV. The CSI volume handle is the dataroom ID, from `retyc --json dataroom ls`.
+#
+# The mount settings are read at stage from volumeAttributes, with the same keys as the PVC
+# annotations (csi.retyc.com/uid is mandatory: every file of the mount belongs to it, and only a pod
+# running with that UID can write). Add pvcName and pvcNamespace to have the claim's annotations
+# read too: they win over volumeAttributes. The chart's ValidatingAdmissionPolicy requires
+# csi.retyc.com/uid on every claim of its StorageClasses, so the claim below carries it as well.
+#
+# On a tenant StorageClass (one with node-stage secrets, such as retyc-rwx-tenant), the PV must
+# name the tenant's Secret itself (nodeStageSecretRef below): kubelet reads it from the PV, not
+# from the class. Without it the node plugin refuses the stage (FailedPrecondition) rather than
+# mount the dataroom with the driver's cluster-wide identity.
 #
 # Static PVs are never deleted by the provisioner (no provisioned-by annotation), so
 # reclaimPolicy: Retain is the honest value here — Delete would leave a Released PV with a
@@ -19,13 +29,19 @@ spec:
     driver: csi.retyc.com
     volumeHandle: REPLACE-WITH-DATAROOM-ID        # e.g. 01a06bd5-45b6-7489-bc18-04990d98b0c2
     volumeAttributes:
-      title: REPLACE-WITH-DATAROOM-TITLE          # e.g. pvc-cf063793-b879-489d-95ab-7b9f14d0f082
-      pvcNamespace: default                       # the claim's namespace: tenant label of the node metrics (optional)
+      csi.retyc.com/uid: "1000"                   # owner of the files: the UID the consumer pods run as
+      # csi.retyc.com/gid: "1000"                 # optional, defaults to the UID
+    # Tenant class only: the tenant's credentials, in the claim's namespace.
+    # nodeStageSecretRef:
+    #   name: retyc-credentials
+    #   namespace: REPLACE-WITH-CLAIM-NAMESPACE
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: retyc-adopted
+  annotations:
+    csi.retyc.com/uid: "1000"
 spec:
   accessModes: [ReadWriteMany]
   storageClassName: retyc-rwx-retain

@@ -2,9 +2,8 @@
 //
 // The two endpoints deliberately mean different things. /healthz only says "the process is up
 // and serving"; it backs the kubelet livenessProbe, and a failure there restarts the container.
-// On the node plugin a restart kills every davfs2 mount on the node (the FUSE daemons live in
-// the container), so liveness must never trip on a transient condition. /readyz carries the real
-// diagnosis (local webdav server answering, Retyc credentials valid) and backs the
+// On the node plugin, liveness must never trip on a transient condition. /readyz carries the real
+// diagnosis (Retyc credentials valid, volumes recovered) and backs the
 // readinessProbe, which only flips the pod to NotReady and records why.
 package health
 

@@ -36,6 +36,10 @@ spec:
       {{- with .Values.controller.priorityClassName }}
       priorityClassName: {{ . }}
       {{- end }}
+      {{- with .Values.controller.hostAliases }}
+      hostAliases:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: csi-provisioner
           image: "{{ .Values.controller.provisioner.image.repository }}:{{ .Values.controller.provisioner.image.tag }}"
@@ -43,11 +47,35 @@ spec:
           args:
             - --csi-address=/csi/csi.sock
             - --extra-create-metadata
+            # CreateVolume runs several CLI calls; csi-provisioner's own default is 10s.
+            - --timeout=60s
+            {{- if and (eq (include "retyc-csi.leaderElection" .) "true") (not (has "--leader-election" .Values.controller.provisioner.extraArgs)) }}
+            - --leader-election
+            {{- end }}
             {{- range .Values.controller.provisioner.extraArgs }}
             - {{ . | quote }}
             {{- end }}
           resources:
             {{- toYaml .Values.controller.provisioner.resources | nindent 12 }}
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+        - name: csi-resizer
+          image: "{{ .Values.controller.resizer.image.repository }}:{{ .Values.controller.resizer.image.tag }}"
+          imagePullPolicy: {{ .Values.controller.resizer.image.pullPolicy }}
+          args:
+            - --csi-address=/csi/csi.sock
+            # Each call runs `retyc dataroom set` (token refresh, API round-trips): 10 s by default is short.
+            - --resize-timeout=60s
+            - --modify-timeout=60s
+            {{- if and (eq (include "retyc-csi.leaderElection" .) "true") (not (has "--leader-election" .Values.controller.resizer.extraArgs)) }}
+            - --leader-election
+            {{- end }}
+            {{- range .Values.controller.resizer.extraArgs }}
+            - {{ . | quote }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.controller.resizer.resources | nindent 12 }}
           volumeMounts:
             - name: socket-dir
               mountPath: /csi
@@ -100,6 +128,10 @@ spec:
       {{- end }}
       {{- with .Values.controller.affinity }}
       affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controller.topologySpreadConstraints }}
+      topologySpreadConstraints:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       {{- with .Values.controller.tolerations }}

@@ -15,6 +15,10 @@ metadata:
   namespace: privatebin
   labels:
     app: privatebin
+  annotations:
+    # Owner of every file of the volume: the UID and GID PrivateBin runs as (securityContext below).
+    csi.retyc.com/uid: "65534"
+    csi.retyc.com/gid: "82"
 spec:
   accessModes: [ReadWriteMany]
   storageClassName: retyc-rwx
@@ -23,7 +27,7 @@ spec:
       storage: 1Gi
 ---
 # PrivateBin purges expired pastes while it handles a paste creation, at most every [purge] limit
-# seconds: it reads every paste to find the expired ones, one WebDAV round trip each, which stalls
+# seconds: it reads every paste to find the expired ones, one API round trip each, which stalls
 # that request for seconds on a cold cache. The CronJob at the end purges instead. A limit below 1
 # does not disable the purge but runs it on every creation (PurgeLimiter::canPurge): ten years it
 # is. Absent or empty sections keep PrivateBin's defaults.
@@ -101,8 +105,8 @@ spec:
         app: privatebin
     spec:
       automountServiceAccountToken: false
-      # No fsGroup: the driver declares fsGroupPolicy None, the davfs2 mount is world-writable
-      # (dir_mode=0777, file_mode=0666) and rejects chown anyway.
+      # No fsGroup: the driver declares fsGroupPolicy None. The volume belongs to the claim's
+      # csi.retyc.com/uid and gid, so the pods run as exactly that UID to write.
       securityContext:
         runAsUser: 65534
         runAsGroup: 82

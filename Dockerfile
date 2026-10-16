@@ -1,8 +1,10 @@
 # The retyc-cli release embedded in the image — the single source of truth for that version.
 # Bump it here (Dependabot proposes it); `make image RETYC_CLI_VERSION=...` overrides for a
-# one-off build. The node plugin needs >= v1.3.0 (`webdav serve --addr host:port --metrics-addr
-# --metrics-runtime`): an older CLI exits on the unknown flags and every mount fails.
-ARG RETYC_CLI_VERSION=v1.4.0
+# one-off build. It must match the mount pods' image in the chart's values.yaml.
+ARG RETYC_CLI_VERSION=v1.5.0-beta2
+# Registry/repository of the retyc-cli image; `make image RETYC_CLI_IMAGE=...` overrides it (e.g.
+# a locally built CLI image).
+ARG RETYC_CLI_IMAGE=ghcr.io/retyc/retyc-cli
 # Build provenance, set by `make image` (git describe / rev-parse / date -u); also reported by the
 # driver's GetPluginInfo through ldflags.
 ARG VERSION=dev
@@ -27,43 +29,18 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath \
     -o /retyc-k8s-csi .
 
 # Reuse the officially published retyc-cli image instead of vendoring/rebuilding the binary —
-# dataroom creation and WebDAV serving are security-sensitive (AGE crypto) and should always run
+# dataroom management is security-sensitive (AGE crypto) and should always run
 # the same vetted build the CLI team ships. Pulled from GitHub's registry (same digest as the
 # Docker Hub mirror, no anonymous pull limits, provenance attached to the source repository).
-FROM ghcr.io/retyc/retyc-cli:${RETYC_CLI_VERSION} AS retyc
+FROM ${RETYC_CLI_IMAGE}:${RETYC_CLI_VERSION} AS retyc
 
 FROM debian:trixie-slim
 
-# libnss-unknown: davfs2 enforces permissions itself (the kernel is told allow_other without
-# default_permissions) and, for any uid that is neither 0 nor the mount owner, its check starts
-# with getpwuid(uid) and denies everything when that fails (cache.c, has_permission). The daemon
-# runs in *this* container, so a pod's runAsUser would never resolve here without an NSS module
-# that synthesises an entry for unknown uids. The package rewrites nsswitch.conf on install —
-# and once it is active, davfs2's postinst sees `getent passwd davfs2` succeed for the
-# not-yet-created account and skips creating it ("group davfs2 does not exist" at mount time),
-# hence the two separate installs, davfs2 first.
+# ca-certificates for the controller's HTTPS calls; the `mount` binary (util-linux, in the base
+# image) is what k8s.io/mount-utils calls for the bind mounts.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends davfs2 ca-certificates tini && \
-    apt-get install -y --no-install-recommends libnss-unknown && \
-    rm -rf /var/lib/apt/lists/* && \
-    # mount.davfs refuses to run without /etc/mtab ("can't access file /etc/mtab"). `docker run`
-    # creates this symlink at container start, containerd (k3s, CRI) does not — so ship it.
-    ln -sf /proc/mounts /etc/mtab
-
-# davfs2 tuning for a non-interactive, multi-pod mount. Shipped defaults would break or hurt:
-#   ask_auth 1      → mount.davfs prompts for a username on stdin (no TTY → mount fails).
-#   delay_upload 10 → a closed file waits 10s before being PUT; other pods see stale data.
-#   dir_refresh 60  → directory listings cached 60s (on top of retyc-cli's own 30s cache).
-#   use_locks 1     → WebDAV LOCKs are per retyc-webdav process, i.e. per node: they can't
-#                     coordinate anything across nodes and only add round-trips.
-COPY <<'EOF' /etc/davfs2/davfs2.conf
-ask_auth      0
-use_locks     0
-delay_upload  0
-dir_refresh   5
-file_refresh  1
-gui_optimize  0
-EOF
+    apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
 COPY --from=retyc /retyc /usr/local/bin/retyc
 COPY --from=builder /retyc-k8s-csi /usr/local/bin/retyc-k8s-csi
@@ -89,7 +66,4 @@ LABEL org.opencontainers.image.title="Retyc CSI Driver" \
       org.opencontainers.image.base.name="docker.io/library/debian:trixie-slim" \
       com.retyc.cli.version="${RETYC_CLI_VERSION}"
 
-# tini as PID 1 reaps the mount.davfs daemons: they detach from the driver at mount time, so the
-# driver is not their parent, and one killed outside an unmount (OOM) would otherwise stay a
-# zombie, keeping its PID file "alive" for the remount (see internal/mount).
-ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/retyc-k8s-csi"]
+ENTRYPOINT ["/usr/local/bin/retyc-k8s-csi"]

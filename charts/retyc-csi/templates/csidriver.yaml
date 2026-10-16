@@ -9,8 +9,10 @@ metadata:
 spec:
   attachRequired: false
   podInfoOnMount: false
-  # chown/chmod on a WebDAV-backed FUSE mount is meaningless; non-root access comes from the
-  # davfs2 dir_mode/file_mode mount options.
+  # kubelet must not chown/chmod the volume for a pod's fsGroup: RetycFS reports every file as
+  # owned by the claim's csi.retyc.com/uid and gid (`retyc fs mount --uid/--gid`), so a recursive
+  # chown would change nothing and walk the whole dataroom through the API. A pod writes by running
+  # as that UID, not through fsGroup.
   fsGroupPolicy: None
   volumeLifecycleModes:
     - Persistent

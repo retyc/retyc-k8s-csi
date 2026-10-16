@@ -1,7 +1,8 @@
 // Package driver implements the CSI Identity, Controller and Node gRPC services of the Retyc
-// CSI driver. Retyc datarooms, mounted via retyc-cli's WebDAV server + davfs2, back an RWX
-// filesystem volume — see doc/architecture.md for the design and its trade-offs (no
-// resize/snapshot, no per-dataroom capacity enforcement, eventually-consistent shared filesystem).
+// CSI driver. Retyc datarooms, mounted through retycfs, back an RWX
+// filesystem volume — see doc/architecture.md for the design and its trade-offs (no snapshot,
+// eventually-consistent shared filesystem). The capacity of a volume is the dataroom's storage
+// reservation, enlarged by ControllerExpandVolume.
 package driver
 
 import (
@@ -48,16 +49,25 @@ func (s *IdentityServer) GetPluginCapabilities(
 					},
 				},
 			},
+			// ControllerExpandVolume only enlarges the reservation on the Retyc side: a volume in
+			// use can be expanded (without this, csi-resizer waits for the volume to be unpublished).
+			{
+				Type: &csi.PluginCapability_VolumeExpansion_{
+					VolumeExpansion: &csi.PluginCapability_VolumeExpansion{
+						Type: csi.PluginCapability_VolumeExpansion_ONLINE,
+					},
+				},
+			},
 		},
 	}, nil
 }
 
 // Probe reports readiness. It's intentionally a static OK: real health (retyc auth validity,
-// webdav server liveness) surfaces through CreateVolume/NodeStageVolume errors instead, since
+// retycfs mounts) surfaces through CreateVolume/NodeStageVolume errors instead, since
 // there's no cheap, side-effect-free liveness check to run here.
 // Probe reports the same readiness as /readyz. Not-ready is a plain `ready: false`, not a gRPC
 // error: per the CSI spec an error here means "plugin is unhealthy, restart me", and on the node
-// a restart is exactly what we don't want for a transient webdav outage.
+// a restart is exactly what we don't want for a transient outage.
 func (s *IdentityServer) Probe(ctx context.Context, _ *csi.ProbeRequest) (*csi.ProbeResponse, error) {
 	if s.Ready != nil {
 		if err := s.Ready(ctx); err != nil {

@@ -1,4 +1,7 @@
+{{- /* A class without tenantSecretName needs the cluster-wide identity: skipped without one (NOTES). */ -}}
+{{- $global := include "retyc-csi.credentialsSecretName" . }}
 {{- range .Values.storageClasses }}
+{{- if or .tenantSecretName $global }}
 ---
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
@@ -15,6 +18,7 @@ metadata:
     {{- end }}
 provisioner: {{ include "retyc-csi.driverName" $ }}
 reclaimPolicy: {{ .reclaimPolicy | default "Delete" }}
+allowVolumeExpansion: true
 volumeBindingMode: {{ .volumeBindingMode | default "Immediate" }}
 {{- if .tenantSecretName }}
 parameters:
@@ -22,5 +26,9 @@ parameters:
   csi.storage.k8s.io/provisioner-secret-namespace: ${pvc.namespace}
   csi.storage.k8s.io/node-stage-secret-name: {{ .tenantSecretName | quote }}
   csi.storage.k8s.io/node-stage-secret-namespace: ${pvc.namespace}
+  # csi-resizer: ControllerExpandVolume, and ControllerModifyVolume which reuses this secret.
+  csi.storage.k8s.io/controller-expand-secret-name: {{ .tenantSecretName | quote }}
+  csi.storage.k8s.io/controller-expand-secret-namespace: ${pvc.namespace}
+{{- end }}
 {{- end }}
 {{- end }}

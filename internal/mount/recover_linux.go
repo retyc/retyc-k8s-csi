@@ -7,7 +7,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Detach lazily unmounts target (MNT_DETACH): a dead davfs2 mount still referenced by a pod's
+// Detach lazily unmounts target (MNT_DETACH): a dead FUSE mount still referenced by a pod's
 // bind mount or an open file would refuse a plain unmount with EBUSY.
 func (m *Mounter) Detach(target string) error {
 	if err := unix.Unmount(target, unix.MNT_DETACH); err != nil && !errors.Is(err, unix.EINVAL) {

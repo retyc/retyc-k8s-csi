@@ -1,0 +1,2 @@
+# helm dependency build fills it from Chart.lock.
+/charts/

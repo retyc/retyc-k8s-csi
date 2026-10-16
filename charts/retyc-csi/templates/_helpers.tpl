@@ -94,3 +94,77 @@ envFrom:
       name: {{ . }}
 {{- end }}
 {{- end }}
+
+{{/*
+The StorageClasses this release renders, as a JSON list of names: those with a tenantSecretName,
+and the others only when a cluster-wide identity exists.
+*/}}
+{{- define "retyc-csi.storageClassNames" -}}
+{{- $global := include "retyc-csi.credentialsSecretName" . }}
+{{- $names := list }}
+{{- range .Values.storageClasses }}
+{{- if or .tenantSecretName $global }}{{ $names = append $names .name }}{{ end }}
+{{- end }}
+{{- $names | toJson }}
+{{- end }}
+
+{{/*
+"true" when csi-provisioner and csi-resizer run with --leader-election: more than one controller
+replica, or the flag set by hand in either sidecar's extraArgs.
+*/}}
+{{- define "retyc-csi.leaderElection" -}}
+{{- $c := .Values.controller }}
+{{- or (gt (int $c.replicas) 1) (has "--leader-election" $c.provisioner.extraArgs) (has "--leader-election" $c.resizer.extraArgs) }}
+{{- end }}
+
+{{/*
+Secret and key holding RETYC_CACHE_REDIS_URL for the node plugin, as "name/key", or "" with the
+memory cache. Fails on cache.store: redis without a Redis.
+*/}}
+{{- define "retyc-csi.redisURLSecret" -}}
+{{- $c := .Values.cache }}
+{{- if eq $c.store "redis" }}
+{{- if and $c.redis.subchart.enabled $c.redis.subchart.existingSecret }}
+{{- $auth := dig "auth" "existingSecret" "" (.Values.redis | default dict) }}
+{{- if ne $auth $c.redis.subchart.existingSecret }}
+{{- fail (printf "cache.redis.subchart.existingSecret is %q: set redis.auth.existingSecret to the same Secret (now %q), for the Redis subchart to read its password there" $c.redis.subchart.existingSecret $auth) }}
+{{- end }}
+{{- printf "%s/RETYC_CACHE_REDIS_URL" $c.redis.subchart.existingSecret }}
+{{- else if $c.redis.subchart.enabled }}
+{{- printf "%s/RETYC_CACHE_REDIS_URL" (include "retyc-csi.redisAuthSecretName" .) }}
+{{- else if $c.redis.external.existingSecret }}
+{{- printf "%s/%s" $c.redis.external.existingSecret $c.redis.external.existingSecretKey }}
+{{- else if $c.redis.external.url }}
+{{- printf "%s/RETYC_CACHE_REDIS_URL" (include "retyc-csi.redisAuthSecretName" .) }}
+{{- else }}
+{{- fail "cache.store is redis: enable cache.redis.subchart or set cache.redis.external.url or existingSecret" }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
+Name of the Secret the chart creates for Redis (subchart password and URL, or the external URL).
+Built from the release name alone: the subchart's auth.existingSecret refers to it the same way.
+*/}}
+{{- define "retyc-csi.redisAuthSecretName" -}}
+{{- printf "%s-redis-auth" .Release.Name | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Service of the Redis subchart, as the CloudPirates chart names it (cloudpirates.fullname).
+*/}}
+{{- define "retyc-csi.redisSubchartHost" -}}
+{{- $r := .Values.redis | default dict }}
+{{- $name := "" }}
+{{- if $r.fullnameOverride }}
+{{- $name = $r.fullnameOverride | trunc 63 | trimSuffix "-" }}
+{{- else }}
+{{- $base := $r.nameOverride | default "redis" }}
+{{- if contains $base .Release.Name }}
+{{- $name = .Release.Name | trunc 63 | trimSuffix "-" }}
+{{- else }}
+{{- $name = printf "%s-%s" .Release.Name $base | trunc 63 | trimSuffix "-" }}
+{{- end }}
+{{- end }}
+{{- printf "%s.%s.svc" $name (($r.namespaceOverride | default .Release.Namespace)) }}
+{{- end }}

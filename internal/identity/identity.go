@@ -67,7 +67,7 @@ func FromEnv(env []string) *Credentials {
 }
 
 // Key is a short, stable, non-reversible identifier of the credentials, used to name the
-// per-identity WebDAV server and state directory. Never log the inputs; the key is safe to log.
+// per-identity resources. Never log the inputs; the key is safe to log.
 func (c *Credentials) Key() string {
 	sum := sha256.Sum256([]byte(c.Token + "\x00" + c.Passphrase))
 
