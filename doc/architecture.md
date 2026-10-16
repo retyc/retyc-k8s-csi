@@ -2,188 +2,283 @@
 
 `retyc-k8s-csi` is a filesystem CSI driver in the same family as `csi-driver-nfs` or `csi-driver-smb`: no
 attach/detach step, no block devices, one shared filesystem per volume mounted on every node that needs it. The
-filesystem is a Retyc dataroom, reached through the WebDAV server built into `retyc-cli` and mounted with `davfs2`.
+filesystem is a Retyc dataroom, mounted with RetycFS, the filesystem built into `retyc-cli` (`retyc fs mount`). Each
+mount runs in its own pod, the **mount pod**, so that the node plugin holds no mount and can restart freely.
 
 ## Overview
 
 ```
-   PersistentVolumeClaim                                 Pod
-          │                                               │ /data
-          ▼                                               ▼
-  ┌─ controller ──────────┐              ┌─ node plugin (DaemonSet) ────────────────────┐
-  │ csi-provisioner       │              │ node-driver-registrar                        │
-  │ retyc-k8s-csi         │              │ retyc-k8s-csi ── mount -t davfs ──▶ davfs2   │
-  │   └─ retyc dataroom   │              │   └─ retyc webdav serve ◀── loopback ────┘   │
-  │      create / rm      │              └──────────────┬───────────────────────────────┘
-  └──────────┬────────────┘                             │  encrypted chunks
-             ▼                                          ▼
-                              Retyc API
+   PersistentVolumeClaim (csi.retyc.com/uid)                       Pod (runAsUser = uid)
+          │                                                           │ /data
+          ▼                                                           ▼
+  ┌─ controller (Deployment) ──────────────┐   ┌─ node plugin (DaemonSet, privileged) ──────────┐
+  │ csi-provisioner --extra-create-metadata│   │ csi-node-driver-registrar                      │
+  │ csi-resizer (expand + modify)          │   │ retyc-k8s-csi --mode=node   (no retyc process) │
+  │ retyc-k8s-csi --mode=controller        │   │   NodeStage   → Secret + mount pod, /readyz    │
+  │   └─ retyc dataroom create / set / rm  │   │   NodePublish → bind staging path → target     │
+  └──────────────────┬─────────────────────┘   │   NodeUnstage → delete the mount pod (drain)   │
+                     │                         │   watch + every 30 s: repair, restack binds    │
+                     │                         └──────────────┬─────────────────────────────────┘
+                     │                                        │ creates, deletes, probes :9567
+                     │                         ┌─ mount pod (1 per volume and node) ───────────┐
+                     │                         │ retyc fs mount retyc://<id> <staging path>     │
+                     │                         │   --allow-other --uid --gid --spool-dir ...   │
+                     │                         │ root, privileged, /dev/fuse, Bidirectional    │
+                     │                         └──────────────┬─────────────────────────────────┘
+                     ▼                                        ▼  encrypted chunks
+                                        Retyc API
 ```
 
-- **Controller** (`--mode=controller`, one replica): creates a dataroom per `CreateVolume`, deletes it on `DeleteVolume`.
-- **Node plugin** (`--mode=node`, one per node): supervises a local `retyc webdav serve`, mounts each dataroom with
-  `davfs2` on a per-volume staging path, then bind-mounts it into every pod that uses the claim.
-- **Sidecars**: the standard `csi-provisioner` and `csi-node-driver-registrar` from kubernetes-csi.
+- **Controller** (`--mode=controller`, one replica by default): creates a dataroom per `CreateVolume`, reserving the
+  claim's size, deletes it on `DeleteVolume`, enlarges it on `ControllerExpandVolume` and applies a
+  VolumeAttributesClass on `ControllerModifyVolume`.
+- **Node plugin** (`--mode=node`, one per node): starts a mount pod per staged volume, bind-mounts the staging path
+  into every pod that uses the claim, and repairs what dies. It runs no `retyc` process.
+- **Mount pods**: one per volume and per node, in the driver's namespace, running `retyc fs mount` from the official
+  `ghcr.io/retyc/retyc-cli` image. The pod **is** the mount.
+- **Sidecars**: the standard `csi-provisioner`, `csi-resizer` and `csi-node-driver-registrar` from kubernetes-csi.
 
 The driver never speaks to the Retyc API itself: every operation goes through the same vetted `retyc` binary the CLI
-team ships, embedded from the official `ghcr.io/retyc/retyc-cli` image.
+team ships, embedded in the controller image (`COPY --from` the retyc-cli image) and run as the mount pods' image.
 
 ## Components
 
 | Component | Where | Role |
 |-----------|-------|------|
-| `retyc-k8s-csi --mode=controller` | `Deployment` in `kube-system`, one replica | `CreateVolume`, `DeleteVolume`, `ValidateVolumeCapabilities` |
-| `csi-provisioner` | sidecar of the controller | watches PVCs, drives the controller over the CSI socket |
-| `retyc-k8s-csi --mode=node` | `DaemonSet` in `kube-system`, privileged | `NodeStageVolume`, `NodePublishVolume` and their inverses; supervises `retyc webdav serve` |
+| `retyc-k8s-csi --mode=controller` | `Deployment` in the driver's namespace, 1 replica by default | `CreateVolume`, `DeleteVolume`, `ControllerExpandVolume`, `ControllerModifyVolume`, `ValidateVolumeCapabilities` |
+| `csi-provisioner` | sidecar of the controller | watches PVCs, passes the claim's name and namespace (`--extra-create-metadata`) |
+| `csi-resizer` | sidecar of the controller | claim expansion and VolumeAttributesClass changes |
+| `retyc-k8s-csi --mode=node` | `DaemonSet`, privileged | `NodeStageVolume`, `NodePublishVolume`, their inverses, `NodeGetVolumeStats`; manages the mount pods |
 | `csi-node-driver-registrar` | sidecar of the node plugin | registers the driver socket with kubelet |
-| `retyc` | embedded in the image, from `ghcr.io/retyc/retyc-cli` | every interaction with the Retyc API and all cryptography |
+| mount pod `retyc-mount-<hash>` | `Pod` in the driver's namespace, pinned to its node | `retyc fs mount` of one dataroom on kubelet's staging path |
+| `retyc` | controller image, and image of the mount pods | every interaction with the Retyc API and all cryptography |
 
-Both modes are the same binary and the same image. The driver itself never calls the Retyc API: the controller runs
-`retyc --json dataroom create|rm|ls` as short-lived subprocesses, the node plugin keeps one long-lived
-`retyc webdav serve` per identity in use on the node.
+Both driver modes are the same binary and the same image. The controller runs `retyc --json dataroom
+create|set|rm|ls` and `user quota` as short-lived subprocesses; the node plugin only talks to the Kubernetes API and
+to the mount pods' `/readyz`.
 
 ## Identities
 
 An identity is an offline token plus the passphrase of the account's AGE key. The driver knows two sources:
 
-- the **default identity**, from the driver pods' environment (the `retyc-csi-credentials` Secret), used by requests
-  that carry no secrets. Optional;
-- **per-request secrets**, resolved by external-provisioner and kubelet from a StorageClass's
-  `csi.storage.k8s.io/*-secret-*` parameters (`retyc-rwx-tenant`) and handed to `CreateVolume`, `DeleteVolume` and
-  `NodeStageVolume`.
+- the **default identity**, from the driver pods' environment (the chart's credentials Secret), used by requests that
+  carry no secrets. Optional: without it, the chart does not render the StorageClasses that would need it;
+- **per-request secrets**, resolved by the sidecars and kubelet from a StorageClass's `csi.storage.k8s.io/*-secret-*`
+  parameters (`retyc-rwx-tenant`) and handed to `CreateVolume`, `DeleteVolume`, `ControllerExpandVolume`,
+  `ControllerModifyVolume` (which reuses the controller-expand secret) and `NodeStageVolume`.
 
-The controller runs each `retyc` subprocess with the request's credentials. The node plugin keeps a pool of WebDAV
-servers keyed by a hash of the credentials: the default one is pinned for the life of the process, a tenant's is
-started at the first `NodeStageVolume` that needs it and stopped at the `NodeUnstageVolume` of its last volume. Each
-server has its own two loopback ports (WebDAV and probes) and its own `HOME`/`XDG_*`/`RETYC_CONFIG_DIR` directory
-under `/var/lib/retyc-csi`, so tokens and caches never mix between accounts. The CLI's kernel keyring cache of the
-unlocked key is turned off (`RETYC_KEYRING_ENABLED=false`) for every subprocess of both components: it lives under one
-fixed name in a keyring they all share.
+kubelet takes the node-stage secret from the PV, not from the class: a static PV of a tenant class written without
+`nodeStageSecretRef` is staged with no secrets. Before using the default identity for a stage, the node plugin
+therefore reads every PV of the volume handle and their StorageClasses, and refuses with `FailedPrecondition` when the class declares
+`csi.storage.k8s.io/node-stage-secret-name` (or the PV names a node-stage secret kubelet did not send): a tenant's
+volume is never mounted with the cluster-wide account (see [configuration.md](configuration.md#static-pvs)).
+
+The controller runs each `retyc` subprocess with the request's credentials. On the node, every mount pod gets its own
+Secret, `retyc-mount-<hash>-<suffix>`, holding `RETYC_TOKEN` and `RETYC_KEY_PASSPHRASE` (the default identity, or a
+copy of the tenant's credentials received at stage) and, with Redis, `RETYC_CACHE_REDIS_URL`. The Secret is created
+before the pod and owned by it, so the garbage collector deletes it with the pod. Each mount pod has its own
+`RETYC_CONFIG_DIR` in an `emptyDir`: tokens and caches never mix between volumes. The CLI's kernel keyring cache is
+turned off (`RETYC_KEYRING_ENABLED=false`) everywhere: every mount pod runs as root and would share root's keyring.
 
 ## Volume lifecycle
 
-1. **Provisioning.** A PVC with `storageClassName: retyc-rwx` (or `retyc-rwx-retain`) makes `csi-provisioner` call
-   `CreateVolume`. The controller runs `retyc dataroom create --title <pv-name>`; the dataroom ID becomes the CSI
-   volume handle and the title is stored in the volume context. The call is idempotent: a dataroom already titled
-   `<pv-name>` is reused.
-2. **Staging.** When a pod using the claim lands on a node, kubelet calls `NodeStageVolume`. The plugin picks the
-   WebDAV server of the volume's identity (starting it if needed), waits for it (bounded, 30 s), then runs
-   `mount -t davfs -o dir_mode=0777,file_mode=0666 http://127.0.0.1:<port>/dataroom/<title> <globalmount>`.
-   One davfs2 mount per volume per node, whatever the number of pods. The plugin then records the volume on the
-   host (see [Recovery](#recovery)).
-3. **Publishing.** `NodePublishVolume` bind-mounts the staging path into the pod's volume directory. With
-   `mountPropagation: Bidirectional` on the kubelet directories, the mount made inside the plugin container is visible
-   to kubelet and to the pod.
-4. **Unpublish / unstage.** The bind mount is removed when the pod goes away; the davfs2 mount when the last pod on the
-   node has left, along with its record. Mounts that recovery stacked on a target path are all removed.
-5. **Deletion.** With `reclaimPolicy: Delete`, deleting the PVC makes the provisioner call `DeleteVolume`, i.e.
-   `retyc dataroom rm retyc://<id> -y`. A dataroom already gone is treated as success. With `Retain`, the PV is
-   released and the dataroom kept; `examples/static-pv.yaml` shows how to adopt it again.
+1. **Provisioning.** A claim on a Retyc StorageClass makes `csi-provisioner` call `CreateVolume`. Before anything is
+   created on the Retyc side, the controller reads the claim (`csi.storage.k8s.io/pvc/name` and `pvc/namespace`) and
+   refuses it with `InvalidArgument` when its `csi.retyc.com/uid` annotation is missing or invalid. It then reuses a
+   dataroom already titled after the volume (idempotency), or checks the account's quota and runs
+   `retyc dataroom create --title <pv-name> --storage-capacity <bytes> [--versioning=<bool>]`. The dataroom ID becomes
+   the volume handle; the volume context records `pvcName` and `pvcNamespace`.
+2. **Capacity.** The reservation is the claim's request, with a floor of **20 GiB** imposed by the API: a smaller
+   request is rounded up, as a block storage rounds up to its allocation unit, and the PV reports the size actually
+   reserved (a `1Gi` claim gets a `20Gi` PV). A `limit_bytes` below 20 GiB is `OutOfRange`.
+3. **Staging.** When a pod using the claim lands on a node, kubelet calls `NodeStageVolume`. The node plugin reads the
+   claim's annotations (over the PV's `volumeAttributes`), creates the mount pod's Secret and the mount pod, and
+   returns `Aborted` until the pod's `/readyz` answers 200: kubelet retries, and a first mount (image pull, login,
+   scrypt) can outlast one CSI call. One mount pod per volume per node, whatever the number of pods.
+4. **Publishing.** `NodePublishVolume` bind-mounts the staging path into the pod's volume directory, read-only for a
+   read-only publish.
+5. **Unpublish / unstage.** The bind mount goes with the pod. When the last pod of the volume has left the node,
+   `NodeUnstageVolume` deletes the mount pod: the CLI gets `SIGTERM`, sends what is still being written (up to
+   `--drain-timeout`, 5 min by default), unmounts and exits. The call returns `Aborted` while the pod drains, then
+   reads its exit code, removes the finalizer and unmounts whatever is left on the staging path.
+6. **Expansion.** Raising the claim's request makes `csi-resizer` call `ControllerExpandVolume`, i.e.
+   `retyc dataroom set --storage-capacity`; nothing is done on the node (`NodeExpansionRequired=false`). A
+   reservation that already covers the request is left alone, so a retry succeeds.
+7. **Deletion.** With `reclaimPolicy: Delete`, deleting the claim makes the provisioner call `DeleteVolume`, i.e.
+   `retyc dataroom rm retyc://<id> -y`. A dataroom already gone is a success. With `Retain`, the PV is released and the
+   dataroom kept; `examples/static-pv.yaml` shows how to adopt it again.
 
-## The WebDAV path
+### Settings read at stage
 
-`retyc webdav serve` exposes every dataroom its identity can see under `/dataroom/<title>`, decrypting on read and
-encrypting on write with the account's AGE identity. Each server listens on a loopback port (`8888` for the default
-identity, the next free ones for tenants) inside the node plugin's network namespace, without WebDAV authentication:
-the only client that can reach it is the `davfs2` mount started from the same container. Nothing on the node or in
-other pods can connect to it.
+Every `csi.retyc.com/*` annotation of the claim (see [configuration.md](configuration.md#pvc-annotations)) is read
+**at stage**, along with the mount pods' chart settings. A change takes effect at the next mount of the volume on a
+node, never on a running mount pod: the pod carries a hash of everything it cannot change (credentials, owner,
+options, resources, image, cache), and a stage that finds another hash recreates the pod only when the volume is no
+longer published on the node. Otherwise the pod keeps its settings and the claim gets a `MountConfigChanged` event.
+A new retyc-cli version (chart `mount.image`) follows the same rule: running mount pods keep theirs until their volume
+is remounted, and `retyc_csi_mount_pod_outdated` counts them.
 
-Each server also gets a second loopback port for `--metrics-addr` (`8889` for the default identity). The driver
-probes its `/readyz` - it never calls the Retyc API - to decide when a staged volume can be mounted and whether the
-node plugin is ready: the listener comes up once the login check and the key unlock succeeded, answers `200` while the
-WebDAV port serves, and `503` as soon as the server shuts down (signal, expired login). The same listener serves the
-server's `/metrics`, which the node plugin merges, labeled with the identity key and the tenant's namespace, into its own `/metrics`
-(see [configuration.md](configuration.md#metrics)).
+### VolumeAttributesClass and versioning
 
-The supervisor restarts a server after it exits, with an exponential backoff: 5 s, then 10 s, 20 s... up to 5 min,
-plus up to 10% of jitter. The backoff starts over once the server was seen serving, or when it had run for a minute
-before exiting. Exit codes `77` (login needs a new token: missing, expired or revoked) and `78` (key passphrase missing
-or wrong) mean the same credentials will fail again: after three such exits in a row the supervisor gives up on the
-server, which stays down until its credentials change (a new identity key, hence a new server) or the node plugin
-restarts. Any other exit code, `1` included, may be transient (Retyc API or identity provider unreachable) and is
-retried forever. The supervisor keeps the server's last output line, which is what `/readyz` reports when a server is
-down (for instance `key passphrase check failed: wrong key passphrase`), prefixed by the identity's key.
+The only mutable parameter is `versioning` (`true` or `false`), from a VolumeAttributesClass (Kubernetes 1.34+). It is
+applied at creation (`mutable_parameters`) and whenever the claim's `volumeAttributesClassName` changes
+(`ControllerModifyVolume`, `retyc dataroom set --versioning=<bool> -y`). A class without `versioning` changes nothing;
+an unknown key is refused. With versioning, every `close` of a written file stores a version. **Turning it off is
+destructive**: the driver confirms the CLI's prompt on the caller's behalf, and the next completed upload of each file
+deletes its older versions.
 
-`davfs2` is configured for a non-interactive, multi-client mount (`/etc/davfs2/davfs2.conf` in the image):
+### Errors of the controller
 
-| Setting | Value | Why |
-|---------|-------|-----|
-| `ask_auth` | 0 | no TTY to prompt on |
-| `use_locks` | 0 | WebDAV locks would be per node and only add round-trips |
-| `delay_upload` | 0 | a closed file is uploaded immediately, so other nodes see it sooner |
-| `dir_refresh` / `file_refresh` | 5 / 1 s | short listing cache, on top of the CLI's own 30 s cache |
+| Condition | CSI code |
+|-----------|----------|
+| no `csi.retyc.com/uid`, or an invalid one; unknown StorageClass parameter; unknown or invalid VolumeAttributesClass parameter; block volume; API validation error | `InvalidArgument` |
+| claim not found | `NotFound` |
+| claim cannot be read (Kubernetes API) | `Unavailable` |
+| `limit_bytes` below 20 GiB or below the request; reservation the API refuses to shrink (`capacity_shrink`) or below its minimum (`capacity_too_small`) | `OutOfRange` |
+| account read-only, dataroom count reached, no storage left on the plan (`plan_exceeded`, `storage_exceeded`) | `ResourceExhausted` |
+| dataroom of the same name with an incompatible reservation | `AlreadyExists` |
+| no secrets and no default identity; login refused (`auth_required`, `unauthenticated`); key passphrase missing or wrong (`config`); CLI refused as too old (`cli_too_old`) | `FailedPrecondition` |
+| API answered 403 (`forbidden`) | `PermissionDenied` |
+| API rate limit (`rate_limited`) | `Unavailable` |
+| dataroom missing on expand or modify | `NotFound` |
+| anything else from the CLI (`api_error`, `error`, an unknown kind) | `Internal` |
 
-## Consistency
+The provisioner and the resizer retry with their own backoff, and record the message as an event on the claim.
 
-A dataroom is a versioned object store. Through davfs2 it behaves as an eventually consistent shared filesystem:
+The CLI's failures are told apart by the `kind` of the JSON error it prints on stderr under `--json` (retyc-cli
+v1.5.0-beta1 on: `{"error", "kind", "status", "code", "detail"}`, kinds in brackets above); `detail`, the API's wording,
+is only carried in the message. A login refused is `FailedPrecondition` rather than `Unauthenticated`: in gRPC the
+latter says that the RPC's caller (the sidecar) is not authenticated, while here it is the identity of the secrets that
+the Retyc API refuses, and a new token is what it waits for. An older CLI prints only `{"error": "..."}`: the driver
+then falls back to the text the CLI relays from the API (`API error 404:`, `API error 422:`, `Not enough storage left`,
+`can only be enlarged`, `must be at least N bytes`), and the login, passphrase, 403, rate limit and version refusals
+stay `Internal`.
 
-- a write on node A reaches node B after A's upload, B's listing-cache expiry (up to 30 s in the CLI) and B's
-  `dir_refresh`;
-- a PUT on an existing name creates a new version server-side; the previous one remains in the dataroom history;
-- there is no locking across nodes; concurrent appends to one file interleave or lose lines, last upload wins;
-- changes made outside the cluster (web app, another client) appear within about a minute.
+`ControllerExpandVolume` reads the dataroom's reservation before `dataroom set`: the API accepts the current value
+without effect, but refuses a smaller one, and a reservation already at or above the request (enlarged elsewhere, or
+a reused dataroom) must succeed with its real size.
 
-## Permissions
+## Mount pods
 
-Kubernetes `fsGroup` cannot be applied to a FUSE mount, so the driver declares `fsGroupPolicy: None` and mounts with
-`dir_mode=0777,file_mode=0666`. Two davfs2 behaviours matter:
+The node plugin builds each mount pod itself (no Helm template). Name `retyc-mount-<hash(node, volume)>`, stable so
+that a restarted node plugin finds its pods again; labels `app.kubernetes.io/name=retyc-mount`,
+`csi.retyc.com/volume`, `/node`, `/pvc` and `/namespace`, with the exact values in annotations of the same names.
 
-- those modes apply to entries davfs2 discovers on the server; a file created through the mount keeps the mode the
-  kernel derived from the creating process's umask (0644 for a root pod), until the plugin's metadata cache is
-  rebuilt;
-- davfs2 enforces permissions itself, and for any uid other than root and the mount owner it starts with
-  `getpwuid()` *inside the plugin container*. The image ships `libnss-unknown` so that any `runAsUser` resolves.
+- **Command**: `retyc fs mount retyc://<volume-id> /staging/globalmount --allow-other --uid=<uid> --gid=<gid>
+  --spool-dir=/spool --metrics-addr=0.0.0.0:9567 --drain-timeout=<drainTimeout>`, plus the flags of the claim's
+  annotations and `--cache-store=redis` with Redis.
+- **Where it mounts**: kubelet's staging path is
+  `<kubeletDir>/plugins/kubernetes.io/csi/csi.retyc.com/<sha256(volume handle)>/globalmount`. The pod receives its
+  parent directory, the `<sha256>` one, as a `hostPath` with `Bidirectional` propagation, and mounts
+  RetycFS **directly on the staging path**. The RetycFS mount is then the only mount of the volume on the host besides
+  the pods' bind mounts, which kubelet's check before `NodeUnstageVolume` requires. The pod sees no other volume.
+- **Security context**: root (the retyc-cli image runs as 1000:1000; `mount(2)` needs root), privileged, `/dev/fuse`.
+  The driver's namespace must therefore allow privileged pods (Pod Security `privileged`).
+- **Scheduling**: `nodeName` fixed, tolerates every taint, `system-node-critical` by default, annotated
+  `cluster-autoscaler.kubernetes.io/safe-to-evict: "false"` and `karpenter.sh/do-not-disrupt: "true"`.
+- **Resources**: 50m CPU and 256 MiB requested, 512 MiB limit, no CPU limit (Burstable). Unlocking the AGE key
+  (scrypt) peaks at about 270 MiB at start, then is given back. RetycFS then keeps what the kernel keeps in its
+  cache: about 4 KiB of the mount pod's memory per file or folder examined (`ls -l`, `stat`, `open`, a backup),
+  2 KiB per entry only listed (`ls`, `find`). The kernel drops these entries when the node runs short of memory,
+  never when only the mount pod reaches its limit: the mount pod is then killed (`137`, OOMKilled) and recreated.
+  The default limit holds about 100 000 entries examined; raise `csi.retyc.com/mount-memory-limit` for a larger
+  dataroom walked in full. Overridable per claim (`csi.retyc.com/mount-*` annotations).
+- **Spool**: `hostPath` `<mount.spoolDir>/<volume-id>` (`/var/lib/retyc-csi/spool/<id>`), mode 0700, emptied by the
+  node plugin before every creation: a killed process leaves its files there.
+- **Restart policy** `Never`: the node plugin recreates the pod, with its own backoff (below).
+- **Grace period**: `drainTimeout` + 10 s, so that kubelet only sends `SIGKILL` once the drain is over.
+- **Termination message**: `FallbackToLogsOnError`, so the end of the CLI's log stays in the pod status after a failure.
+- **Readiness probe** on `/readyz` (port `metrics`), for `kubectl` and Prometheus; the node plugin probes `/readyz`
+  itself on the pod IP, which needs no `hostNetwork`.
+- **No service account token**, no service links.
 
-## Resource profile
+### Finalizer
 
-Steady state is about 40 MiB per identity served on the node. Resolving a dataroom session in `retyc webdav serve`
-unlocks the account's AGE key with scrypt (work factor 2^18, ~256 MiB of working memory), once per dataroom per
-server; the Go runtime returns that memory within minutes. The manifests set a 512 MiB limit for that reason: a lower
-limit would OOM-kill the plugin on the first mount, and with it every mount on the node. Raise it with the number of
-tenant identities expected per node.
+Each mount pod carries the finalizer `csi.retyc.com/in-use`. It keeps the pod **object** after its container stopped,
+until the node plugin has read the exit code (`status.containerStatuses[].state.terminated`). Only
+`NodeUnstageVolume`, a recreation by the node plugin or the deletion of an orphan removes it. It does **not** stop the
+container from being killed: a `kubectl delete`, an eviction or a `kubectl drain` still stop the mount (see
+[Limitations](#limitations)).
 
-## Failure modes
+### Backoff and give-up
 
-| Event | Effect | Recovery |
-|-------|--------|----------|
-| `retyc webdav serve` exits | node `/readyz` fails, new mounts wait up to 30 s then fail `Unavailable`; existing mounts recover on the next access | automatic, supervisor restart with a backoff from 5 s to 5 min |
-| Node plugin pod restarts | every davfs2 mount on the node dies with the container; writes in flight are lost | automatic at startup (see [Recovery](#recovery)); pods without `mountPropagation: HostToContainer` need a container restart |
-| A `mount.davfs` daemon dies (OOM kill) | that volume answers `Transport endpoint is not connected` on the node | automatic within 30 s, or at the next `NodePublishVolume` of the volume on the node |
-| Wrong token or passphrase (default identity) | node and controller pods go `1/2` NotReady with the reason on `/readyz`; the supervisor gives up after three attempts; a controller rollout keeps the previous pod | fix the Secret, restart the DaemonSet/Deployment |
-| Wrong token or passphrase (tenant Secret) | that tenant's claims fail to provision or stage; the node pod goes `1/2` while its server is down, other tenants keep working | fix the tenant's Secret; kubelet retries |
-| Tenant Secret deleted before its claims | `DeleteVolume` cannot authenticate (with a `Delete` class); `Retain` classes are unaffected | recreate the Secret, or delete the PV by hand |
-| Volume mounted within 60 s of its creation | `mount.davfs` gets `404 Not Found` while the server's dataroom-title cache is stale | automatic, kubelet retries until the cache expires |
-| Retyc API unreachable | `CreateVolume`/`DeleteVolume` fail and are retried by the provisioner; reads of uncached files fail | automatic |
+A mount pod that exits while its volume is staged is recreated with an exponential backoff: 5 s, then 10 s, 20 s... up
+to 5 min, plus up to 10% of jitter. The backoff starts over once a pod was seen ready, or after a pod ran for a minute.
+Exit codes `77` (the login needs a new token: missing, expired or revoked) and `78` (key passphrase missing or wrong)
+mean the same credentials will fail again: after three such exits in a row, the node plugin **gives up** on the volume
+on that node. `NodeStageVolume` then fails at once with `FailedPrecondition`, without creating a pod nor logging in
+again, and the claim gets one `MountGaveUp` event. The give-up lasts until the credentials change (another config
+hash), the volume is unstaged from the node, the node plugin restarts, or someone deletes the exited mount pod
+(`kubectl delete pod`): each of these starts a full series of tries again. A give-up during a stage is a final error
+for kubelet: it removes `vol_data.json` and will never unstage the volume, so the next sweep (30 s at most) releases
+the exited pod, its finalizer and its Secret, like any orphan. The give-up itself is remembered for 30 minutes after
+the last stage that found it, so that kubelet's retries keep failing at once (with the last output of the pod) instead
+of logging in again with refused credentials. Any other code may be transient (API or identity provider unreachable) and is retried
+forever. The backoff lives in the node plugin's memory: a restart of the plugin forgets it.
+
+### Exit codes
+
+| Code | Meaning | What follows |
+|------|---------|--------------|
+| `0` | unmounted, nothing lost (an unstage, or an `umount` of the staging path) | nothing |
+| `1` | any other error, a failure at start included (a Redis that does not answer, a mount point left dead) | when the node plugin releases the pod: a `MountFailed` event on the claim, unless the output reports lost files (below); recreated with the backoff while the volume is staged |
+| `75` | writes lost: files being written, or background deletes, could not be sent before the filesystem went away (drain timed out or cut short, API refusal) | when the node plugin releases the pod: a `WritesLost` event on the claim; recreated with the backoff while the volume is staged, never a give-up (the mount itself worked) |
+| `77` | login cannot recover: `RETYC_TOKEN` missing, expired or revoked; it wins over `75` when both happen | backoff, give-up after three in a row; a `WritesLost` event too if the output reports lost files |
+| `78` | key passphrase missing or wrong | backoff, give-up after three in a row |
+| `137` | killed (`SIGKILL`: `kill -9`, OOM kill, grace period exceeded) | recreated with the backoff, binds restacked; a `MountOOMKilled` event on the claim for an OOM kill, or any `137` while no deletion asked the pod to stop (containerd does not always say `OOMKilled`) |
+
+A pod that left no exit code (evicted, lost with its node) counts as `-1`.
+
+`75` comes with retyc-cli v1.5.0-beta1. An older CLI (a development image before it) exits `1` on lost writes as on any
+other error, with the same message (`N files being written were not sent before the filesystem was unmounted...`): an
+exit `1` whose output (the termination message) holds those words, or the drain's `abandoned (no drain timeout)` and
+`drain over after ...: ... not sent`, is read as lost writes. A newer CLI never exits `1` on lost writes, so the
+fallback holds for both; whether the pod was ever ready only changes the wording of `MountFailed`.
 
 ## Recovery
 
-The davfs2 daemons run in the node plugin container, so a restart of the plugin kills every mount on the node, and
-kubelet never calls `NodeStageVolume` or `NodePublishVolume` again for a volume it considers staged. The plugin
-repairs those mounts itself:
+The mount pods are the only record of the staged volumes: there is no state file on the node. Each pod records its
+staging path, its settings and its Secret in annotations. A volume counts as staged while kubelet's `vol_data.json`
+exists next to its staging path, or while a pod target path still binds its mount.
 
-1. `NodeStageVolume` writes a record per staging path under `--stage-dir` (`/csi/staged`, i.e.
-   `<kubeletDir>/plugins/csi.retyc.com/staged` on the host): dataroom title, claim namespace, the major:minor of the
-   davfs2 mount and, for a tenant volume, the tenant's credentials. `NodeUnstageVolume` deletes it.
-2. At startup, before it opens the CSI socket and while `/readyz` reports `remounting the volumes staged before the
-   restart`, the plugin goes through the records: for each staging path whose mount is dead, it waits for the WebDAV
-   server of the volume's identity, mounts the dataroom again, and **stacks** a bind mount of the new mount on every
-   pod target path still bound to the dead one (found in `/proc/self/mountinfo` by device and source). A DaemonSet
-   rollout therefore waits for a node's volumes to be back before moving on to the next node.
-3. The same pass runs every 30 s, for a `mount.davfs` killed while the plugin keeps running, and `NodePublishVolume`
-   runs it for its volume when a new pod lands on a node whose staging mount is dead.
+The node plugin reconciles the mount pods with the mounts:
+
+- **at start**, before it opens the CSI socket (bounded to a minute), so that kubelet's first calls find the mounts
+  repaired;
+- **on every change of a mount pod** of its node, through a watch (informer): a pod that exits, is deleted or becomes
+  ready is repaired at once, within its restart delay;
+- **every 30 s**, as a safety net for what an event did not cure (an API error, a pod stuck terminating). A failed
+  repair is queued again after 1 s, doubled at each failure in a row up to 5 min;
+- from `NodePublishVolume`, when a new pod lands on a node whose staging mount is dead: kubelet does not stage a volume
+  again while another pod on the node still uses it.
+
+For each mount pod whose volume is staged:
+
+1. a dead pod is recreated on the same staging path, after the dead RetycFS mount (`ENOTCONN`) is unmounted and the
+   spool emptied;
+2. once the new pod is ready, a bind mount of the staging path is **stacked** on every pod target path still bound to
+   the dead mount (found in `/proc/self/mountinfo` by the source `retyc://<id>` and the device). Past four layers on a
+   target path, the dead ones on top are unmounted first.
+
+A mount pod whose volume is neither staged nor bound anywhere is an orphan (an unstage that never completed, a stage
+that failed for good) and is deleted. When the node plugin cannot read kubelet's directory of the driver,
+`<kubeletDir>/plugins/kubernetes.io/csi/csi.retyc.com` (a `node.kubeletDir` that is not kubelet's `--root-dir`, or the
+plugins directory not mounted), every volume would look unstaged: it then deletes no orphan and logs the error. A volume still mounted on the node without any mount pod (deleted by hand, with
+its finalizer removed) is logged: nothing is left to recreate it from, reschedule its pods.
+
+After a `kill -9` of a mount process, the volume is back in about ten seconds: the first restart waits 5 s, then the
+login, the key unlock and the restack.
 
 Stacking rather than replacing is what reaches running pods: a container's mount of the volume is a copy of the target
 path's mount, and a mount stacked on the target propagates into that copy when the pod mounts the volume with
-`mountPropagation: HostToContainer`, as the examples do. The stacked layers are all unmounted by
-`NodeUnpublishVolume`.
+`mountPropagation: HostToContainer`, as the examples do. `NodeUnpublishVolume` unmounts every layer.
 
 `HostToContainer` is recommended, not required. It is Linux `rslave` propagation: mounts made on the host under the
 volume's target path show up in the container, nothing propagates back. It needs neither `privileged` nor any
 capability (only `Bidirectional` does), and its scope is the claim's own mount point, where only the node plugin,
-already privileged, mounts anything: the pod gains no access to the host. Policies that reject any `mountPropagation`
-other than `None` usually target `Bidirectional`, or `hostPath` volumes, where it would expose host mounts. Where it is
-not allowed anyway, the pod keeps the dead mount until its container restarts and picks up the new one then: give it
-a liveness probe that writes to the volume, for instance
+already privileged, mounts anything: the pod gains no access to the host. Without it, a pod keeps the dead mount after
+its mount pod died (`Transport endpoint is not connected`) until its container restarts. Where a policy forbids it,
+give the pod a liveness probe that writes to the volume, so that it restarts onto the new mount:
 
 ```yaml
 livenessProbe:
@@ -194,36 +289,147 @@ livenessProbe:
   failureThreshold: 2
 ```
 
-Recovery does not save data: what a pod was writing when the daemon died, and what davfs2 had not uploaded yet, is lost.
-Volumes staged by a driver version without records are not recovered: reschedule their pods once.
+Recovery does not save data: what a pod was writing when its mount process was **killed** is lost. What it was
+writing when the process got `SIGTERM` is sent during the drain.
 
-The image runs the driver under `tini`, which reaps the detached `mount.davfs` daemons; a killed daemon left as a
-zombie would keep its PID file, and `mount.davfs` refuses to mount over it.
+## High availability
+
+There is no active/standby pair and no failover between nodes: each node mounts the volumes its pods use, on its own,
+and every node mounting a `ReadWriteMany` claim reaches the same dataroom through the API. Scale out by running the
+consumers on more nodes.
+
+- **Node plugin restart** (upgrade, OOM kill, crash): no mount is cut, the mount pods hold them. Stages, publishes and
+  repairs on that node wait for the plugin to be back. The DaemonSet rolls with `maxUnavailable: 1`.
+- **Mount pod death**: that volume on that node is down until the node plugin recreates the pod (about ten seconds
+  after a `kill -9`), and its pods see it again through `HostToContainer` (above).
+- **Controller**: one replica by default; provisioning, expansion and deletion wait while it restarts, mounts are
+  unaffected. With `controller.replicas` above 1, the chart adds `--leader-election` to csi-provisioner and csi-resizer:
+  one replica works, the others wait on a lease.
+
+## The data path
+
+RetycFS mounts the dataroom by its ID, decrypting on read and encrypting on write with the account's AGE identity, in
+the mount pod. The kernel enforces the permissions (`default_permissions`).
+
+### Permissions
+
+- Every file and folder belongs to the claim's `csi.retyc.com/uid` and `csi.retyc.com/gid` (`--uid`, `--gid`). The
+  mode is the one stored with the file (`chmod` works and is kept), 0644 / 0755 for a file without one; `chown` is
+  accepted and ignored.
+- **A pod must run with that UID to write** (`securityContext.runAsUser`). A pod running as another UID reads (0644 /
+  0755) but gets `Permission denied` on every write. The driver does nothing to check it beforehand.
+- The owner is set per volume and per node, not per pod: all the pods of a claim get the same owner.
+- `fsGroup` changes nothing: the driver declares `fsGroupPolicy: None` (a recursive `chown` would walk the whole
+  dataroom through the API, and is ignored anyway).
+- **Role of the identity**: a dataroom the identity only views (role *viewer*), or whose plan refuses writes, is
+  mounted read-only. The role is read at mount time: after a role change, the volume must be remounted on each node
+  (all its pods on the node gone, then back). `csi.retyc.com/read-only` mounts read-only whatever the role.
+- **Role contributor**: a contributor cannot replace an existing file by `rename` (`EACCES`), so the "write a
+  temporary file, then rename it over the original" pattern of editors and many tools fails for that role.
+
+### Consistency
+
+- `close()` sends the file and returns the error of the upload; `fsync` sends too. A successful `close` means stored,
+  unless `csi.retyc.com/unsafe-write` is set.
+- Every `close` of a file opened for writing stores a version, an unchanged file excepted; with versioning off, only
+  the latest is kept.
+- Opening a file reads the version current at that moment (close-to-open). Listings and names are cached for the cache
+  TTL (the CLI's default, 1 min, or `csi.retyc.com/cache-ttl`): a change made on another node or outside the cluster is
+  seen after that at most.
+- `rename` over an existing file is atomic on the server; `cp` of a whole file is a server-side copy; symbolic links,
+  `chmod` and `utimens` work and are stored. Reads are positioned: reading the middle of a large file downloads the
+  chunks it covers.
+- There is no locking across nodes; concurrent writes to one file from two nodes: last upload wins.
+- Files whose name matches the local-file patterns (by default `.*.swp .*.swx *~ 4913`, what vim creates around an
+  edit) stay in the mount pod's spool and are never sent: invisible to other nodes and gone at unstage.
+
+### Cache
+
+The listing cache of the mount pods is `memory` by default: one per mount pod. With `cache.store: redis`, every mount
+pod of the cluster shares one Redis (the bundled CloudPirates subchart, standalone, or your own, 7.4 or later,
+standalone only), so that several nodes mounting the same dataroom fetch a folder once. Keys carry the dataroom ID:
+volumes with different TTLs can share it. Without `cache.highConfidentiality`, Redis holds the **decrypted** file and
+folder names; with it, only the API's ciphertexts. A Redis that fails at start fails the mount (exit `1`); once mounted,
+a failing Redis falls back to a private memory cache.
+
+## Admission policy
+
+The chart ships a `ValidatingAdmissionPolicy` (with its binding, `validationActions: [Deny]`) on the claims of its
+StorageClasses. It checks the `csi.retyc.com/*` annotations with the formats the driver accepts, at creation and at
+update, refuses a claim without `csi.retyc.com/uid` and an update that removes it. On an update, only the annotations
+that change are checked. Its reach is the claims whose `storageClassName` is one of the classes the release renders:
+nothing else on the cluster, not the claims that get one of those classes later as the cluster default, not a static
+PV's claim on another class. The driver still refuses an invalid claim at `CreateVolume` or at stage. See
+[configuration.md](configuration.md#admission-policy) for its `failurePolicy`.
 
 ## Security
 
-- **Encryption**: files and metadata are encrypted on the node with [AGE](https://github.com/FiloSottile/age)
+- **Encryption**: files and metadata are encrypted in the mount pod with [AGE](https://github.com/FiloSottile/age)
   post-quantum hybrid keys by `retyc-cli`, before anything leaves the node. Retyc servers only ever see ciphertext.
-- **Identity**: a Retyc account per cluster (the driver's `Secret`) or per namespace (`retyc-rwx-tenant`, resolved by
-  kubelet and the provisioner from the claim's namespace). Tokens and passphrases only ever live in those Secrets and in
-  the environment of the `retyc` processes, plus, for each tenant volume staged on a node, its
-  [recovery](#recovery) record (`0600`, root, under `<kubeletDir>/plugins/csi.retyc.com/staged`, deleted at unstage);
-  each identity's WebDAV server runs with its own state directory.
-- **Trust boundary**: the WebDAV server listens on loopback inside the node plugin's own network namespace, and only the
-  `davfs2` mount in that same container talks to it. It is unreachable from pods and from the node.
-- **Pod access**: mounts are world-writable (`dir_mode=0777,file_mode=0666`) so that non-root pods can write - Kubernetes
-  `fsGroup` cannot be applied to a FUSE mount. Isolation between workloads is therefore at the claim level, not the
-  file level: one dataroom per team or application, not per user.
+- **Identity**: a Retyc account per cluster (the driver's Secret) or per namespace (`retyc-rwx-tenant`). Tokens and
+  passphrases live in those Secrets, in the environment of the `retyc` processes and, for every mount pod, in a
+  **copy** in the driver's namespace (`retyc-mount-*` Secrets), including the tenants' credentials. Whoever can read
+  Secrets in that namespace has every tenant's identity: keep its RBAC strict (no `get`/`list` on secrets for anyone
+  but the node plugin and cluster admins), and enable encryption at rest of Secrets in etcd.
+- **Spool**: a file being written is kept in cleartext in `<mount.spoolDir>/<volume-id>` on the node (0700, root)
+  until it is sent; local files stay there for the life of the mount.
+- **Redis**: without `cache.highConfidentiality`, it holds decrypted names: TLS, password, and no other tenant.
+- **Privileges**: the node plugin and the mount pods are privileged, in a namespace with Pod Security `privileged`.
+  The mount pods get no service account token.
+- **Metrics**: the mount pods serve `/metrics`, `/readyz` and `/healthz` on port 9567 of their pod IP, without
+  authentication (numbers, operation names, no file names). Restrict ingress to Prometheus and the node plugin with a
+  NetworkPolicy (`extraObjects` in the chart).
+- **Pod access**: isolation between workloads is at the claim level: one dataroom per team or application. Inside a
+  volume, pods running as the owner UID write, any other UID reads what the stored modes allow.
 
 ## Limitations
 
-- **No resize, no snapshots, no capacity enforcement.** Requested sizes are accepted and echoed back; Retyc does not cap
-  a dataroom's size.
-- **A node plugin restart interrupts the mounts on that node.** The FUSE daemons live in the plugin container. The
-  driver remounts them at startup (see [Recovery](#recovery)), but writes in flight are lost, and pods without
-  `mountPropagation: HostToContainer` only see the volume again after a container restart. Plan node plugin upgrades
-  accordingly.
-- **File modes are set at creation.** `dir_mode`/`file_mode` apply to entries discovered on the server; a file created
-  through the mount keeps the mode derived from the creating pod's umask until the plugin's metadata cache is rebuilt.
-- **`CreateVolume` idempotency checks the first page of `retyc dataroom ls` only.** A retried create past that page can
-  produce a duplicate dataroom; the driver logs a warning when it becomes possible.
+- **No snapshots, no block volumes.**
+- **20 GiB minimum** per dataroom reservation: smaller claims are rounded up.
+- **`df` follows an expand within the cache TTL.** The dataroom is enlarged at once; a running mount caches the
+  dataroom's stats for the cache TTL (1 min by default, `csi.retyc.com/cache-ttl`) before reporting the new size.
+- **Settings apply at the next mount** of the volume on a node: annotations, chart `mount.*` and `cache.*` values, the
+  retyc-cli version, the role of the identity.
+- **The finalizer does not protect the mount from a drain.** `kubectl drain` evicts the mount pods like any other pod
+  (it needs `--force`, the mount pods having no controller, and `--delete-emptydir-data`): the mount stops after its
+  drain of pending writes, and the node plugin recreates it while consumers of the volume remain on the node. A
+  PodDisruptionBudget per mount pod is under consideration, not decided.
+- **Writes in flight are lost** when a mount process is killed (`kill -9`, OOM kill, grace period exceeded).
+- **Many small files take long to drain.** Uploads are bounded across files (`RETYC_API_CONCURRENCY_UPLOAD`, 4 by
+  default): thousands of small files written just before an unstage take a minute or more (about 50 a second on a local
+  API). Raising it loads the API.
+- **The spool has no size limit of its own**: a full disk under `mount.spoolDir` fails the write with `ENOSPC`.
+- **A killed client waits for slow operations.** The kernel interrupts a RetycFS request when its caller gets a signal,
+  but the mount only honours it for a caller it can see as killed; pods are in another PID namespace, so a process
+  killed during a slow operation (a large download, a throttled request) goes when that operation ends. `mount.hostPID`
+  is meant to make callers visible, and is not validated.
+- **One mount pod per volume and per node**: 256 MiB requested each by default. Many claims on one node add up.
+- **The mount pods' logs go with them**: read them while the pod exists (see
+  [troubleshooting.md](troubleshooting.md#reading-a-mount-pods-logs)).
+
+## Known gaps and future work
+
+- **Drain and the finalizer.** The finalizer `csi.retyc.com/in-use` does not stop `kubectl drain` (see
+  [Limitations](#limitations)); it also blocks `drain --force` on the object, and only `--disable-eviction` goes around
+  it. A PodDisruptionBudget per mount pod with `minAvailable: 1` and a selector on a label of the pod is the lead
+  (`maxUnavailable: 0` does not work on a pod without a controller); the decision is postponed.
+- **Kubelet's timeout on a long unstage.** `NodeUnstageVolume` returns `Aborted` while the mount pod drains (5 min by
+  default) and kubelet retries; how kubelet's own timeout behaves over such a drain is not measured. It is rare: `close`
+  waits for the upload, so the spool holds uploads without an open file only when an application was killed during its
+  `close`, or in rare cases (deletions queued with `--background-delete`, a mount detached while busy). A test with the
+  API throttled to 64 kbit/s never reached it: kubelet was still waiting for the application's container to stop.
+- **A slow API blocks the applications.** `close` uploads the file and returns only once it is sent, and creating a file
+  can wait up to 2 min for the API. An upload that is slow but progressing has no time limit, by design: an 8 MiB chunk
+  must get through a slow link. The application cannot be interrupted meanwhile, not even by `kill -9`: retyc-cli
+  honours an interrupt only when the caller is dying, read from `/proc`, and the application's PID, in another pod,
+  is not visible from the mount pod. The pod stays `Terminating` until the upload ends: the mount pod is not stopping, so
+  its drain timeout does not apply. With an upload that stalls without the connection dropping, it stays blocked
+  indefinitely.
+  `hostPID: true` on the mount pods would make the interrupts work, but it is rejected: the Pod Security Standards
+  forbid it from `baseline` on, and it would expose the `/proc` of every process of the node. The lead is in retyc-cli:
+  cancelling an upload that has sent nothing for some time, so that `close` returns an error and the upload is retried
+  in the background.
+- **Spool journal (retyc-cli).** After a crash, what the spool held is not sent again at the next start (the node plugin
+  empties it); a journal of the spools would allow it.
+- **Resuming a RetycFS mount (retyc-cli).** Handing the open `/dev/fuse` descriptor to a new process would restart or
+  upgrade a mount without a cut. A large change that needs a patch of go-fuse.

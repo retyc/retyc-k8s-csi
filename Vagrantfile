@@ -30,18 +30,14 @@ Vagrant.configure("2") do |config|
     set -euo pipefail
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -q
-    apt-get install -y -q --no-install-recommends davfs2 curl ca-certificates rsync jq vim
+    apt-get install -y -q --no-install-recommends fuse3 curl ca-certificates rsync jq vim
 
-    # Same davfs2 tuning the container image ships (see Dockerfile), so the manual stage-1 checks
-    # measure exactly what the node plugin will see.
-    cat > /etc/davfs2/davfs2.conf <<'EOF'
-    ask_auth      0
-    use_locks     0
-    delay_upload  0
-    dir_refresh   5
-    file_refresh  1
-    gui_optimize  0
-    EOF
+    # FUSE for the mount pods, which take /dev/fuse from the host (hostPath): the module loaded now
+    # and at every boot. fuse3 brings fusermount3, for manual checks and `fusermount3 -u` of a dead
+    # mount.
+    modprobe fuse
+    echo fuse > /etc/modules-load.d/fuse.conf
+    test -c /dev/fuse
 
     # k3s, with its bundled Traefik serving the examples' ingresses; a 0644 kubeconfig lets the
     # vagrant user run kubectl without sudo (KUBECONFIG is exported for login shells, which is what

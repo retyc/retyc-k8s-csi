@@ -9,6 +9,7 @@ on:
       - 'go.sum'
       - 'Dockerfile'
       - 'charts/**'
+      - '.github/scripts/**'
       - '.github/workflows/main.yml'
       - '.github/workflows/_ci.yml'
       - '.github/workflows/_docker.yml'
@@ -21,7 +22,7 @@ jobs:
     name: CI
     uses: ./.github/workflows/_ci.yml
 
-  # Builds the full image (driver + embedded retyc-cli + davfs2) for both platforms everywhere, so
+  # Builds the full image (driver + embedded retyc-cli) for both platforms everywhere, so
   # a broken Dockerfile fails the PR rather than the release; pushes it (as `master`) from the
   # default branch only. `latest` belongs to the release workflow.
   docker:

@@ -2,7 +2,14 @@
 
   kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }}
 
-Both pods must be 2/2 Running. A driver container that is not ready explains why on /readyz and in its logs.
+The controller pods must be 3/3 Running, the node pods 2/2. A driver container that is not ready explains why on /readyz and in its logs.
+Each staged volume runs a mount pod in this namespace, on the node that mounts it:
+
+  kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/name=retyc-mount -L csi.retyc.com/pvc,csi.retyc.com/node
+
+WARNING: the mount pods are privileged (RetycFS, mount propagation). The namespace {{ .Release.Namespace }} must allow it, e.g.
+  kubectl label namespace {{ .Release.Namespace }} pod-security.kubernetes.io/enforce=privileged
+(kube-system usually does.)
 
 {{- $secret := include "retyc-csi.credentialsSecretName" . }}
 {{- if $secret }}
@@ -10,12 +17,36 @@ Both pods must be 2/2 Running. A driver container that is not ready explains why
 Cluster-wide identity: Secret "{{ $secret }}".
 {{- else }}
 
-No cluster-wide identity configured: only StorageClasses with a tenantSecretName will provision volumes.
+WARNING: no cluster-wide identity (credentials.token or credentials.existingSecret): the StorageClasses without a
+tenantSecretName are not installed, and only per-namespace identities are served.
 {{- end }}
+{{- $classes := include "retyc-csi.storageClassNames" . | fromJsonArray }}
 
 StorageClasses:
 {{- range .Values.storageClasses }}
+{{- if has .name $classes }}
   - {{ .name }}: reclaimPolicy {{ .reclaimPolicy | default "Delete" }}{{ if .tenantSecretName }}, identity from Secret "{{ .tenantSecretName }}" in the claim's namespace{{ else }}, cluster-wide identity{{ end }}
+{{- else }}
+  - {{ .name }}: not installed (needs the cluster-wide identity)
+{{- end }}
 {{- end }}
 
-A ReadWriteMany claim on one of them is a Retyc dataroom shared by every pod that mounts it.
+A ReadWriteMany claim on one of them is a Retyc dataroom shared by every pod that mounts it. The claim needs the
+csi.retyc.com/uid annotation: every file belongs to that UID, and only pods running as it can write.
+{{- if and .Values.admissionPolicy.enabled $classes }}
+The ValidatingAdmissionPolicy {{ include "retyc-csi.fullname" . }}-pvc-annotations checks the csi.retyc.com/* annotations.
+For a StatefulSet, put csi.retyc.com/uid in its volumeClaimTemplates: otherwise every claim it creates is refused, and
+the StatefulSet controller retries in a loop.
+{{- end }}
+{{- if eq .Values.cache.store "redis" }}
+
+Listing cache: Redis{{ if .Values.cache.redis.subchart.enabled }} (subchart, {{ include "retyc-csi.redisSubchartHost" . }}){{ end }}, high confidentiality {{ .Values.cache.highConfidentiality }}.
+{{- if and (not .Values.cache.highConfidentiality) (eq (include "retyc-csi.usesTenantSecrets" .) "true") }}
+
+WARNING: several identities share this Redis (tenant StorageClasses) without cache.highConfidentiality: it holds
+every tenant's decrypted file and folder names. Set cache.highConfidentiality=true unless all tenants trust each other.
+{{- end }}
+{{- else if .Values.cache.redis.subchart.enabled }}
+
+WARNING: cache.redis.subchart.enabled deploys a Redis, but cache.store is memory: the mount pods do not use it.
+{{- end }}

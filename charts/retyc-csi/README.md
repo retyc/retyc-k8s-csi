@@ -15,10 +15,10 @@ helm install retyc-csi retyc/retyc-csi \
   --set credentials.keyPassphrase="$RETYC_KEY_PASSPHRASE"
 ```
 
-From the OCI registry (`--version` selects a chart version):
+From the OCI registry (`--version` selects a chart version; omit it for the latest):
 
 ```sh
-helm install retyc-csi oci://ghcr.io/retyc/charts/retyc-csi --version 0.1.0 -n kube-system ...
+helm install retyc-csi oci://ghcr.io/retyc/charts/retyc-csi --version <chart version> -n kube-system ...
 ```
 
 Or point the chart at a Secret you manage yourself (keys `RETYC_TOKEN` and `RETYC_KEY_PASSPHRASE`):
@@ -27,14 +27,19 @@ Or point the chart at a Secret you manage yourself (keys `RETYC_TOKEN` and `RETY
 helm install retyc-csi retyc/retyc-csi -n kube-system --set credentials.existingSecret=retyc-csi-credentials
 ```
 
-Without either, the driver runs with no cluster-wide identity and only serves StorageClasses that carry a
-`tenantSecretName` (per-namespace identities).
+Without either, the driver runs with no cluster-wide identity: the StorageClasses without a `tenantSecretName` are
+not installed, and only per-namespace identities are served.
 
-The chart installs the `CSIDriver`, RBAC, the controller `Deployment`, the node `DaemonSet` and three StorageClasses
-(`retyc-rwx`, `retyc-rwx-retain`, `retyc-rwx-tenant`). Restarting the node plugin interrupts the mounts on that node: it
-remounts them before turning Ready, but writes in flight are lost, so the DaemonSet rolls one node at a time. Pods
-should mount the claims with `mountPropagation: HostToContainer` to see their volume come back without a restart (see
-[doc/architecture.md](../../doc/architecture.md#recovery)).
+The chart installs the `CSIDriver`, RBAC, the controller `Deployment`, the node `DaemonSet`, the mount pods'
+configuration, a `ValidatingAdmissionPolicy` on the claims' `csi.retyc.com/*` annotations and up to three
+StorageClasses (`retyc-rwx`, `retyc-rwx-retain`, `retyc-rwx-tenant`). Each staged volume runs in a privileged mount pod
+(`retyc fs mount`) in the release namespace, which must allow it (Pod Security `privileged`). Restarting the node plugin
+cuts no mount. Every claim needs the `csi.retyc.com/uid` annotation: the files belong to that UID, and only pods running
+as it can write. See [PVC annotations](../../doc/configuration.md#pvc-annotations) for the others.
+
+**StatefulSets**: put `csi.retyc.com/uid` in the `volumeClaimTemplates` (`metadata.annotations`). Without it, the
+admission policy refuses each claim the StatefulSet controller creates, and the controller retries in a loop: the
+StatefulSet's pods stay `Pending` and its events repeat the refusal.
 
 ## Values
 
@@ -44,35 +49,62 @@ should mount the claims with `mountPropagation: HostToContainer` to see their vo
 | `image.tag` | `""` | Overrides the image tag; defaults to the chart's `appVersion` |
 | `image.pullPolicy` | `IfNotPresent` | |
 | `imagePullSecrets` | `[]` | Pull secrets for the driver image, both components (only for a private mirror) |
-| `credentials.create` | `true` | Create the cluster-wide identity Secret from `token` and `keyPassphrase` |
+| `credentials.create` | `true` | Create the cluster-wide identity Secret from `token` and `keyPassphrase` (when `token` is set) |
 | `credentials.existingSecret` | `""` | Existing Secret with `RETYC_TOKEN` and `RETYC_KEY_PASSPHRASE`; takes precedence |
 | `credentials.token` | `""` | Offline token (`retyc auth login --offline`) |
 | `credentials.keyPassphrase` | `""` | Passphrase of the account's AGE key |
-| `storageClasses` | three classes | List of StorageClasses: `name`, `reclaimPolicy`, `volumeBindingMode`, `isDefault`, `annotations`, `tenantSecretName` |
-| `rbac.create` | `true` | Create the provisioner ClusterRole/Binding (Secrets access added when a class uses `tenantSecretName`) |
+| `storageClasses` | three classes | `name`, `reclaimPolicy`, `volumeBindingMode`, `isDefault`, `annotations`, `tenantSecretName`. All allow expansion; a class without `tenantSecretName` is only installed with a cluster-wide identity |
+| `rbac.create` | `true` | Create the ClusterRoles/Roles and bindings |
 | `serviceAccount.controller.*` / `serviceAccount.node.*` | create | `create`, `name`, `annotations` |
+| `extraObjects` | `[]` | Extra manifests rendered as templates (see values.yaml for NetworkPolicy examples) |
 | `healthPort` | `9808` | `/healthz`, `/readyz` and `/metrics` port of the driver containers |
-| `metrics.podMonitor.enabled` | `false` | Create a Prometheus Operator `PodMonitor` scraping both components |
-| `metrics.podMonitor.namespace` / `labels` | `""` / `{}` | Where to create it, and labels your Prometheus selects on |
-| `metrics.podMonitor.interval` / `scrapeTimeout` / `relabelings` / `metricRelabelings` | Prometheus defaults | Scrape settings |
+| `metrics.podMonitor.enabled` | `false` | Create two Prometheus Operator `PodMonitor`s: both driver components, and the mount pods (port `metrics`, 9567) |
+| `metrics.podMonitor.namespace` / `labels` | `""` / `{}` | Where to create them, and labels your Prometheus selects on |
+| `metrics.podMonitor.interval` / `scrapeTimeout` / `relabelings` / `metricRelabelings` | Prometheus defaults | Scrape settings, shared by both |
 | `logLevel` | `2` | klog verbosity |
 | `probes.liveness` / `probes.readiness` | see values | Probe timings, shared by both components |
-| `controller.replicas` | `1` | Add `--leader-election` to `controller.provisioner.extraArgs` for more |
-| `controller.resources` | 64Mi / 512Mi | Driver container resources |
-| `controller.provisioner.image.*` | `csi-provisioner:v6.3.0` | Sidecar image |
-| `controller.provisioner.extraArgs` | `[]` | |
+| `controller.replicas` | `1` | Above 1, `--leader-election` is added to csi-provisioner and csi-resizer (with a Role on leases) |
+| `controller.resources` | requests `cpu: 10m`, `memory: 64Mi`; limits `memory: 512Mi` | Driver container resources (it runs the `retyc` CLI for each provisioning call) |
+| `controller.provisioner.image.*` / `controller.resizer.image.*` | `csi-provisioner:v6.3.0` / `csi-resizer:v2.3.0` | Sidecar images |
+| `controller.provisioner.extraArgs` / `controller.resizer.extraArgs` | `[]` | Extra sidecar arguments |
 | `controller.extraEnv` | `[]` | Extra environment for the driver container (e.g. `HTTPS_PROXY`, `NO_PROXY`) |
 | `controller.extraVolumes` / `controller.extraVolumeMounts` | `[]` | Extra volumes for the driver container (e.g. a private CA bundle) |
-| `controller.{podAnnotations,podLabels,nodeSelector,tolerations,affinity,priorityClassName}` | | Scheduling |
+| `controller.hostAliases` | `[]` | Extra `/etc/hosts` entries |
+| `controller.{podAnnotations,podLabels,nodeSelector,tolerations,affinity,topologySpreadConstraints,priorityClassName}` | | Scheduling (anti-affinity example in values.yaml) |
 | `node.kubeletDir` | `/var/lib/kubelet` | Kubelet root on the nodes |
-| `node.webdavPort` | `8888` | First loopback port of the `retyc webdav serve` servers (two per identity) |
-| `node.stateDir` | `/var/lib/retyc-csi` | Per-identity state inside the container |
-| `node.resources` | 64Mi / 512Mi | Keep the limit above ~350 MiB per identity (scrypt peak) |
+| `node.resources` | requests `cpu: 10m`, `memory: 32Mi`; limits `memory: 128Mi` | The node plugin runs no retyc process |
 | `node.registrar.image.*` | `csi-node-driver-registrar:v2.17.0` | Sidecar image |
-| `node.extraEnv` | `[]` | Extra environment for the driver container, also seen by `retyc webdav serve` |
+| `node.extraArgs` / `node.extraEnv` | `[]` | Extra arguments and environment for the driver container |
 | `node.extraVolumes` / `node.extraVolumeMounts` | `[]` | Extra volumes for the driver container |
-| `node.updateStrategy` | `RollingUpdate`, `maxUnavailable: 1` | One node at a time |
+| `node.updateStrategy` | `RollingUpdate`, `maxUnavailable: 1` | |
 | `node.{podAnnotations,podLabels,nodeSelector,tolerations,affinity,priorityClassName}` | tolerate all | Scheduling |
+| `mount.image.*` | `ghcr.io/retyc/retyc-cli:v1.5.0-beta2` | Mount pods' image; must match the Dockerfile's `RETYC_CLI_VERSION` (checked in CI) |
+| `mount.imagePullSecrets` | `[]` | Pull secrets of the retyc-cli image |
+| `mount.extraEnv` / `mount.hostAliases` | `[]` | Extra environment (after the driver's) and `/etc/hosts` entries of the mount pods |
+| `mount.hostPID` | `false` | Share the host PID namespace (diagnosis only) |
+| `mount.resources` | 50m, 256Mi / 512Mi | Default resources, overridden per claim by the `csi.retyc.com/mount-*` annotations |
+| `mount.drainTimeout` | `5m` | Time a stopping mount pod gets to send its pending writes |
+| `mount.priorityClassName` | `""` | Empty means `system-node-critical` |
+| `mount.spoolDir` | `/var/lib/retyc-csi/spool` | Host directory of the spools, one per volume |
+| `cache.store` | `memory` | Listing cache of the mount pods: `memory` (one per pod) or `redis` (shared) |
+| `cache.highConfidentiality` | `false` | Keep only ciphertexts in Redis; set it when several tenants share the Redis |
+| `cache.redis.subchart.enabled` | `false` | Deploy the CloudPirates Redis chart (standalone, no persistence, `allkeys-lru`; values under `redis`) |
+| `cache.redis.subchart.password` | `""` | Redis password; empty generates one and keeps it across upgrades (not in GitOps: see below) |
+| `cache.redis.subchart.existingSecret` | `""` | Your own Secret instead, keys `redis-password` and `RETYC_CACHE_REDIS_URL`; set `redis.auth.existingSecret` to the same name |
+| `cache.redis.external.url` | `""` | URL of your own Redis (7.4+, standalone), stored in a Secret by the chart |
+| `cache.redis.external.existingSecret` / `existingSecretKey` | `""` / `RETYC_CACHE_REDIS_URL` | Existing Secret holding the URL instead |
+| `admissionPolicy.enabled` | `true` | `ValidatingAdmissionPolicy` on the annotations of the claims of the chart's StorageClasses |
+| `admissionPolicy.failurePolicy` | `Fail` | `Fail` or `Ignore` when the policy cannot be evaluated; only the claims of the chart's classes are matched |
+| `redis.*` | see values | Values of the Redis subchart (`maxmemory`, resources...) |
+
+The Redis URL never goes into the mount pods' ConfigMap: the node plugin reads it from a Secret (`RETYC_CACHE_REDIS_URL`)
+and copies it into each mount pod's own Secret. The admission policy only knows the classes this release installs: a
+claim given one of them later as the cluster default, or a static PV's claim on another class, is not checked (the
+driver still refuses an invalid claim at provisioning or at mount).
+
+**GitOps (Argo CD, `helm template`)**: set `cache.redis.subchart.password`, or use `cache.redis.subchart.existingSecret`.
+The generated password relies on Helm's `lookup`, which returns nothing outside `helm install`/`upgrade`: each render
+would generate a new one, while the Redis StatefulSet keeps the former one.
 
 ## Releasing a chart version
 

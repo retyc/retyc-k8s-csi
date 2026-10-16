@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/signal"
 	"strings"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -20,31 +19,33 @@ import (
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/grpc"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
+	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
 
 	"github.com/retyc/retyc-k8s-csi/internal/driver"
 	"github.com/retyc/retyc-k8s-csi/internal/health"
 	"github.com/retyc/retyc-k8s-csi/internal/identity"
 	"github.com/retyc/retyc-k8s-csi/internal/mount"
+	"github.com/retyc/retyc-k8s-csi/internal/mountpod"
 	"github.com/retyc/retyc-k8s-csi/internal/retycclient"
-	"github.com/retyc/retyc-k8s-csi/internal/webdavsvc"
 )
 
 func main() {
 	var (
-		mode       = flag.String("mode", "", "plugin mode: controller | node")
-		endpoint   = flag.String("endpoint", "unix:///csi/csi.sock", "CSI gRPC endpoint")
-		retycBin   = flag.String("retyc-bin", "retyc", "path to the retyc CLI binary")
-		nodeID     = flag.String("node-id", "", "node ID reported by NodeGetInfo (node mode only, default: hostname)")
-		webdavAddr = flag.String("webdav-addr", "127.0.0.1",
-			"bind address for the supervised 'retyc webdav serve' (node mode only)")
-		webdavPort = flag.Int("webdav-port", 8888,
-			"first port for the supervised 'retyc webdav serve' servers, one per identity (node mode only)")
-		stateDir = flag.String("state-dir", "/var/lib/retyc-csi",
-			"directory for per-identity retyc state (node mode only)")
-		stageDir = flag.String("stage-dir", "/csi/staged",
-			"host directory where the node plugin records staged volumes, to remount them after a restart; "+
-				"empty disables the recovery (node mode only)")
+		mode     = flag.String("mode", "", "plugin mode: controller | node")
+		endpoint = flag.String("endpoint", "unix:///csi/csi.sock", "CSI gRPC endpoint")
+		retycBin = flag.String("retyc-bin", "retyc", "path to the retyc CLI binary")
+		nodeID   = flag.String("node-id", "",
+			"Kubernetes name of the node, reported by NodeGetInfo (node mode only, default: $NODE_ID, $NODE_NAME)")
+		mountConfig = flag.String("mount-config", "/etc/retyc-csi/mount.json",
+			"JSON configuration of the mount pods: image, resources, drain timeout... (node mode only)")
+		namespace = flag.String("namespace", "",
+			"namespace of the mount pods, the driver's (node mode only, default: $POD_NAMESPACE)")
 		httpEndpoint = flag.String("http-endpoint", ":9808",
 			"address for the /healthz (liveness), /readyz (readiness) and /metrics HTTP endpoints; empty disables them")
 	)
@@ -53,8 +54,7 @@ func main() {
 
 	opts := options{
 		mode: *mode, endpoint: *endpoint, retycBin: *retycBin, nodeID: *nodeID,
-		webdavAddr: *webdavAddr, webdavPort: *webdavPort, stateDir: *stateDir, stageDir: *stageDir,
-		httpEndpoint: *httpEndpoint,
+		mountConfig: *mountConfig, namespace: *namespace, httpEndpoint: *httpEndpoint,
 	}
 	if err := run(opts); err != nil {
 		klog.Fatal(err)
@@ -62,8 +62,7 @@ func main() {
 }
 
 type options struct {
-	mode, endpoint, retycBin, nodeID, webdavAddr, stateDir, stageDir, httpEndpoint string
-	webdavPort                                                                     int
+	mode, endpoint, retycBin, nodeID, mountConfig, namespace, httpEndpoint string
 }
 
 // authStatusCacheTTL bounds how often the controller's readiness re-runs `retyc auth status`
@@ -76,13 +75,11 @@ func run(o options) error {
 
 	server := grpc.NewServer()
 	var ready health.Checker
-	// Node mode only: remounting the volumes a previous node plugin staged.
+	// Node mode only: the reconciliation of the mount pods with the mounts.
 	var (
-		recoverStaged func(context.Context)
-		watchStaged   func(context.Context, time.Duration)
-		recovering    atomic.Bool
+		recoverPods func(context.Context)
+		watchPods   func(context.Context, time.Duration)
 	)
-	recovering.Store(true)
 	registry := prometheus.NewRegistry()
 	registry.MustRegister(
 		collectors.NewGoCollector(),
@@ -93,7 +90,6 @@ func run(o options) error {
 			ConstLabels: prometheus.Labels{"version": driver.DriverVersion, "mode": o.mode},
 		}, func() float64 { return 1 }),
 	)
-	gatherers := prometheus.Gatherers{registry}
 	// The pod's Secret (envFrom) provides the cluster-wide default identity, if any; tenants'
 	// identities arrive per request through CSI secrets. The CLI's key cache is off for every
 	// child: it keeps an unlocked AGE key in the kernel session keyring under one fixed name,
@@ -109,49 +105,19 @@ func run(o options) error {
 		} else {
 			klog.Info("no default identity in the environment: only StorageClasses with secret parameters will work")
 		}
-		csi.RegisterControllerServer(server, &driver.ControllerServer{Retyc: retyc})
+		kube, err := inClusterClient()
+		if err != nil {
+			return err
+		}
+		csi.RegisterControllerServer(server, &driver.ControllerServer{Retyc: retyc, Kube: kube})
 	case "node":
-		nodeID := o.nodeID
-		if nodeID == "" {
-			nodeID = os.Getenv("NODE_ID") // set via the downward API (spec.nodeName) in the DaemonSet
+		node, err := nodeServer(o, defaultIdentity)
+		if err != nil {
+			return err
 		}
-		if nodeID == "" {
-			hostname, err := os.Hostname()
-			if err != nil {
-				return fmt.Errorf("determining node ID: %w", err)
-			}
-			nodeID = hostname
-		}
-
-		pool := webdavsvc.NewPool(ctx, o.retycBin, env, o.webdavAddr, o.webdavPort, o.stateDir)
-		if defaultIdentity != nil {
-			if _, err := pool.Pin(defaultIdentity); err != nil {
-				return fmt.Errorf("starting the default webdav server: %w", err)
-			}
-		} else {
-			klog.Info("no default identity in the environment: only StorageClasses with secret parameters will work")
-		}
-		ready = pool.Healthy
-		gatherers = append(gatherers, pool)
-
-		node := &driver.NodeServer{
-			NodeID:  nodeID,
-			Mounter: mount.New(mount.DefaultDavfsOptions),
-			Webdav:  pool,
-		}
-		if o.stageDir != "" {
-			node.Stages = &driver.StageStore{Dir: o.stageDir}
-			recoverStaged, watchStaged = node.Recover, node.Watch
-			// Not ready until the volumes staged before a restart are remounted, so that a rollout
-			// waits for them before moving on to the next node.
-			ready = func(ctx context.Context) error {
-				if recovering.Load() {
-					return errors.New("remounting the volumes staged before the restart")
-				}
-
-				return pool.Healthy(ctx)
-			}
-		}
+		registry.MustRegister(node.Metrics.Collectors()...)
+		recoverPods, watchPods = node.Recover, node.Watch
+		// /readyz depends on no mount pod: the node plugin serves even when a volume cannot mount.
 		csi.RegisterNodeServer(server, node)
 	default:
 		return fmt.Errorf("--mode must be \"controller\" or \"node\", got %q", o.mode)
@@ -159,11 +125,8 @@ func run(o options) error {
 	csi.RegisterIdentityServer(server, &driver.IdentityServer{Ready: ready})
 
 	if o.httpEndpoint != "" {
-		// A server that does not answer its scrape is reported by retyc_csi_webdav_server_up, not
-		// by failing the whole /metrics.
-		// The endpoint listens on the pod IP for kubelet's probes: bound concurrent scrapes, each of
-		// which fans out to every WebDAV server on the node.
-		metrics := promhttp.HandlerFor(gatherers, promhttp.HandlerOpts{
+		// The endpoint listens on the pod IP for kubelet's probes: bound concurrent scrapes.
+		metrics := promhttp.HandlerFor(registry, promhttp.HandlerOpts{
 			ErrorHandling:       promhttp.ContinueOnError,
 			ErrorLog:            klogPrinter{},
 			MaxRequestsInFlight: 2,
@@ -175,14 +138,13 @@ func run(o options) error {
 		}()
 	}
 
-	// After the probes are up, since it can take a while, and before the CSI socket: kubelet's
-	// first calls (an unstage, a new pod) must find the recovered mounts and server references.
-	if recoverStaged != nil {
-		recoverStaged(ctx)
-		recovering.Store(false)
-	}
-	if watchStaged != nil {
-		go watchStaged(ctx, driver.RecoverInterval)
+	// Before the CSI socket, so that kubelet's first calls find the mounts repaired; bounded, since
+	// it only matters for volumes whose mount pod died while the node plugin was down.
+	if recoverPods != nil {
+		recoverCtx, cancelRecover := context.WithTimeout(ctx, time.Minute)
+		recoverPods(recoverCtx)
+		cancelRecover()
+		go watchPods(ctx, driver.RecoverInterval)
 	}
 
 	listener, err := listen(o.endpoint)
@@ -199,6 +161,82 @@ func run(o options) error {
 	klog.Infof("%s plugin listening on %s", o.mode, o.endpoint)
 
 	return server.Serve(listener)
+}
+
+// nodeServer builds the node plugin: its mount pods manager from --mount-config, the node name and
+// the driver namespace from the downward API.
+func nodeServer(o options, defaultIdentity *identity.Credentials) (*driver.NodeServer, error) {
+	nodeID := o.nodeID
+	for _, v := range []string{"NODE_ID", "NODE_NAME"} { // the downward API's spec.nodeName
+		if nodeID == "" {
+			nodeID = os.Getenv(v)
+		}
+	}
+	if nodeID == "" {
+		hostname, err := os.Hostname()
+		if err != nil {
+			return nil, fmt.Errorf("determining node ID: %w", err)
+		}
+		nodeID = hostname
+	}
+	namespace := o.namespace
+	if namespace == "" {
+		namespace = os.Getenv("POD_NAMESPACE")
+	}
+	if namespace == "" {
+		return nil, errors.New("the driver namespace is unknown: set --namespace or $POD_NAMESPACE")
+	}
+	cfg, cache, err := mountpod.LoadConfig(o.mountConfig)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Namespace = namespace
+	// From a Secret, since a Redis URL usually holds a password.
+	if url := os.Getenv("RETYC_CACHE_REDIS_URL"); url != "" {
+		cache.RedisURL = url
+	}
+	if defaultIdentity == nil {
+		klog.Info("no default identity in the environment: only StorageClasses with secret parameters will work")
+	}
+	kube, err := inClusterClient()
+	if err != nil {
+		return nil, err
+	}
+	broadcaster := record.NewBroadcaster()
+	broadcaster.StartRecordingToSink(&typedcorev1.EventSinkImpl{Interface: kube.CoreV1().Events("")})
+	pods := mountpod.New(kube, cfg)
+	node := &driver.NodeServer{
+		NodeID:  nodeID,
+		Mounter: mount.New(),
+		Pods:    pods,
+		Kube:    kube,
+		Events: broadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{
+			Component: driver.DriverName + "-node", Host: nodeID,
+		}),
+		DefaultCredentials: defaultIdentity,
+		Cache:              cache,
+		Metrics:            driver.NewNodeMetrics(),
+	}
+	pods.Prepare = node.Prepare
+	klog.Infof("node %s: mount pods in namespace %s, image %s", nodeID, namespace, pods.Config().Image)
+
+	return node, nil
+}
+
+// inClusterClient builds a Kubernetes client from the pod's service account. The controller reads
+// the claims it provisions volumes for (their annotations); the node plugin reads the claims it
+// stages and manages the mount pods.
+func inClusterClient() (kubernetes.Interface, error) {
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		return nil, fmt.Errorf("loading the in-cluster Kubernetes config: %w", err)
+	}
+	client, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("creating the Kubernetes client: %w", err)
+	}
+
+	return client, nil
 }
 
 // klogPrinter logs the errors promhttp continues past (a family dropped as inconsistent) as warnings.

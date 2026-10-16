@@ -11,16 +11,23 @@
 
 **Retyc CSI driver** is a CSI driver that uses your [Retyc](https://retyc.com) account to support dynamic
 provisioning of `ReadWriteMany` Kubernetes Persistent Volumes via Persistent Volume Claims. Each Persistent Volume is
-a Retyc dataroom, named after the volume, encrypted end to end on the node before anything reaches the Retyc servers.
+a Retyc dataroom, mounted on the nodes with **RetycFS**, the filesystem of the
+[`retyc` CLI](https://github.com/retyc/retyc-cli), and encrypted end to end on the node before anything reaches the
+Retyc servers.
+
+Each volume mounted on a node runs in its own mount pod, so restarting or upgrading the driver cuts no mount. Volumes
+can be expanded, and their versioning switched through a VolumeAttributesClass.
+
+## Requirements
+
+- Kubernetes **1.34** or later;
+- nodes that can run RetycFS (see the [mount pods](doc/architecture.md#mount-pods)) and reach `api.retyc.com` and
+  `auth.retyc.com`;
+- a namespace for the driver that allows privileged pods (Pod Security `privileged`; `kube-system` usually does);
+- a Retyc account and two credentials: a token, printed once by `retyc auth login --offline`, and the passphrase of
+  your Retyc key, the one the CLI asks you for.
 
 ## How to deploy Retyc CSI driver to your cluster
-
-You need a Retyc account and the [`retyc` CLI](https://github.com/retyc/retyc-cli). The driver uses two credentials:
-
-- a token, printed once by `retyc auth login --offline`;
-- the passphrase of your Retyc key, the one the CLI asks you for.
-
-Your nodes must run Kubernetes 1.34 or later, allow privileged pods, have `/dev/fuse` and reach `api.retyc.com`.
 
 ### With Helm
 
@@ -35,8 +42,7 @@ $ helm install retyc-csi retyc/retyc-csi --namespace kube-system \
     --set credentials.keyPassphrase=<key passphrase>
 ```
 
-Both pods must be `2/2 Running`; a `1/2` means the credentials are wrong (see
-[doc/troubleshooting.md](doc/troubleshooting.md)):
+The controller pod must be `3/3 Running`, the node pods `2/2` (see [doc/troubleshooting.md](doc/troubleshooting.md)):
 
 ```console
 $ kubectl -n kube-system get pods -l app.kubernetes.io/instance=retyc-csi
@@ -52,7 +58,11 @@ $ kubectl logs -f retyc-reader
 ```
 
 The reader prints the lines the writer appends. Check `retyc dataroom ls`, or the Retyc web app: the dataroom is
-there, named after the volume.
+there, named after the volume. The volume's mount pod runs next to the driver:
+
+```console
+$ kubectl -n kube-system get pods -l app.kubernetes.io/name=retyc-mount
+```
 
 Delete the test resources:
 
@@ -64,28 +74,47 @@ The dataroom is gone as well.
 
 ### Deploying your own PersistentVolumeClaims
 
-Use `accessModes: [ReadWriteMany]` and one of the storage classes:
+Every claim needs the `csi.retyc.com/uid` annotation: every file of the volume belongs to that UID, and **only pods
+running as that UID can write** (others read). Use `accessModes: [ReadWriteMany]` and one of the storage classes:
+
+```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: shared-docs
+  annotations:
+    csi.retyc.com/uid: "1000"
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: retyc-rwx
+  resources:
+    requests:
+      storage: 20Gi
+```
 
 - `retyc-rwx`: deleting the claim deletes the dataroom;
 - `retyc-rwx-retain`: deleting the claim keeps the dataroom;
 - `retyc-rwx-tenant`: same, with the credentials of a `retyc-credentials` Secret in the claim's namespace instead of
   the cluster-wide ones (see [doc/configuration.md](doc/configuration.md#per-tenant-identities)).
 
-Mount it with `mountPropagation: HostToContainer`, as in the examples: when the node plugin restarts, the pod then
-sees its volume come back without restarting. The setting is unprivileged and scoped to the claim; where a policy
-forbids it, a liveness probe that writes to the volume restarts the container onto the remounted volume instead (see
-[doc/architecture.md](doc/architecture.md#recovery)).
+The size requested is reserved on your plan, 20 GiB at least. Run the pods with `securityContext.runAsUser` set to the
+annotation's UID, and mount the volume with `mountPropagation: HostToContainer`, as in the examples: when a mount pod
+dies and is recreated, the pod then sees its volume come back without restarting (see
+[doc/architecture.md](doc/architecture.md#recovery)). The other annotations (cache, resources of the mount pod,
+read-only...) are in [doc/configuration.md](doc/configuration.md#pvc-annotations).
 
-Every pod mounting the claim, on any node, shares the same dataroom. It behaves like a network drive: writes made on
-one node show up on the others a few seconds later, and concurrent writes to one file are not safe. Good for
-documents, configuration and artefacts; not for databases.
+Every pod mounting the claim, on any node, shares the same dataroom. It behaves like a network drive: `close` returns
+once the file is stored, a change made on one node shows up on the others within the cache TTL (one minute by
+default), and concurrent writes to one file are not safe. Good for documents, configuration and artefacts; not for
+databases.
 
 ## Documentation
 
 - [charts/retyc-csi/README.md](charts/retyc-csi/README.md): chart values
-- [doc/configuration.md](doc/configuration.md): per-namespace credentials, adopting an existing dataroom, flags
-- [doc/troubleshooting.md](doc/troubleshooting.md)
-- [doc/architecture.md](doc/architecture.md): how it works, consistency, security, limitations
+- [doc/configuration.md](doc/configuration.md): PVC annotations, static PVs, versioning, per-namespace credentials,
+  Redis cache, metrics
+- [doc/troubleshooting.md](doc/troubleshooting.md): mount pod logs, exit codes, events
+- [doc/architecture.md](doc/architecture.md): how it works, mount pods, recovery, consistency, security, limitations
 - [doc/testing.md](doc/testing.md): development environment and tests
 
 ## Development

@@ -1,7 +1,6 @@
-# Privileged: the node plugin runs `mount -t davfs` and bind mounts that must become visible to
-# kubelet (mountPropagation: Bidirectional), like every filesystem CSI node plugin. /dev/fuse is
-# for davfs2. The supervised `retyc webdav serve` and `mount.davfs` share this container's network
-# namespace, so no hostNetwork is needed.
+# Privileged: the node plugin runs bind mounts that must become visible to kubelet
+# (mountPropagation: Bidirectional), like every filesystem CSI node plugin. It runs no retyc
+# process: it starts a mount pod per staged volume (configured by the mount-config ConfigMap).
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -28,6 +27,10 @@ spec:
       annotations:
         {{- if and .Values.credentials.create (not .Values.credentials.existingSecret) .Values.credentials.token }}
         checksum/credentials: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- end }}
+        checksum/mount-config: {{ include (print $.Template.BasePath "/mount-config.yaml") . | sha256sum }}
+        {{- if include "retyc-csi.redisURLSecret" . }}
+        checksum/redis: {{ include (print $.Template.BasePath "/redis-secret.yaml") . | sha256sum }}
         {{- end }}
         {{- with .Values.node.podAnnotations }}
         {{- toYaml . | nindent 8 }}
@@ -62,8 +65,7 @@ spec:
             - --mode=node
             - --endpoint=unix:///csi/csi.sock
             - --http-endpoint=:{{ .Values.healthPort }}
-            - --webdav-port={{ .Values.node.webdavPort }}
-            - --state-dir={{ .Values.node.stateDir }}
+            - --mount-config=/etc/retyc-csi/mount.json
             - -v={{ .Values.logLevel }}
             {{- range .Values.node.extraArgs }}
             - {{ . | quote }}
@@ -88,6 +90,19 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
+            # The mount pods and their Secrets live in the driver's namespace.
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            {{- with include "retyc-csi.redisURLSecret" . }}
+            # Preferred over mount.json's, and copied into each mount pod's own Secret.
+            - name: RETYC_CACHE_REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ dir . }}
+                  key: {{ base . }}
+            {{- end }}
             {{- with .Values.node.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -102,11 +117,22 @@ spec:
             - name: pods-mount-dir
               mountPath: {{ .Values.node.kubeletDir }}/pods
               mountPropagation: Bidirectional
+            # Holds kubelet's staging paths, <kubeletDir>/plugins/kubernetes.io/csi/<driver>/<sha>/globalmount.
+            # Each mount pod receives only the <sha> directory of its own volume (Bidirectional) and
+            # mounts RetycFS on globalmount; Bidirectional here makes that mount visible
+            # to the node plugin, which bind-mounts it on the target paths and unmounts a dead one.
+            # Checked on a node: kubelet's GetMountRefs on the staging path then sees only the RetycFS
+            # mount itself, no extra reference. A second, nested mount of a directory under it would
+            # only show every mount twice.
             - name: plugin-dir
               mountPath: {{ .Values.node.kubeletDir }}/plugins
               mountPropagation: Bidirectional
-            - name: dev-fuse
-              mountPath: /dev/fuse
+            # Emptied before every mount pod creation.
+            - name: spool-dir
+              mountPath: {{ .Values.mount.spoolDir }}
+            - name: mount-config
+              mountPath: /etc/retyc-csi
+              readOnly: true
             {{- with .Values.node.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -127,10 +153,13 @@ spec:
           hostPath:
             path: {{ .Values.node.kubeletDir }}/plugins
             type: Directory
-        - name: dev-fuse
+        - name: spool-dir
           hostPath:
-            path: /dev/fuse
-            type: CharDevice
+            path: {{ .Values.mount.spoolDir }}
+            type: DirectoryOrCreate
+        - name: mount-config
+          configMap:
+            name: {{ include "retyc-csi.fullname" . }}-mount-config
         {{- with .Values.node.extraVolumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

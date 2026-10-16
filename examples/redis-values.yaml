@@ -1,0 +1,33 @@
+# Shared listing cache for every mount pod of the cluster, on the bundled Redis subchart
+# (CloudPirates, standalone, no persistence). helm install ... -f examples/redis-values.yaml
+cache:
+  store: redis
+  # Several Retyc identities (tenant StorageClasses) share this Redis: keep the names encrypted in it.
+  highConfidentiality: true
+  redis:
+    subchart:
+      enabled: true
+      # Empty: generated at install, kept across upgrades.
+      password: ""
+
+# Subchart values (https://github.com/CloudPirates-io/helm-charts/tree/main/charts/redis).
+redis:
+  # Below the memory limit; with high confidentiality, about 19 MB per 10,000 cached files.
+  extraConfig: |
+    maxmemory 512mb
+    maxmemory-policy allkeys-lru
+  resources:
+    requests:
+      cpu: 100m
+      memory: 600Mi
+    limits:
+      memory: 700Mi
+
+# Your own Redis instead (7.4 or later, standalone; rediss:// for TLS):
+#
+# cache:
+#   store: redis
+#   highConfidentiality: true
+#   redis:
+#     external:
+#       existingSecret: retyc-redis   # key RETYC_CACHE_REDIS_URL: redis://default:<password>@redis.example:6379

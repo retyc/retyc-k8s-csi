@@ -19,16 +19,16 @@ func get(t *testing.T, h http.Handler, path string) (int, string) {
 }
 
 func TestHandler_HealthzIsUnconditional(t *testing.T) {
-	h := Handler(func(context.Context) error { return errors.New("webdav down") }, nil)
+	h := Handler(func(context.Context) error { return errors.New("backend down") }, nil)
 	if code, body := get(t, h, "/healthz"); code != http.StatusOK || body != "ok" {
 		t.Fatalf("/healthz = %d %q, want 200 ok even when not ready", code, body)
 	}
 }
 
 func TestHandler_ReadyzReportsCheckerError(t *testing.T) {
-	h := Handler(func(context.Context) error { return errors.New("webdav down") }, nil)
+	h := Handler(func(context.Context) error { return errors.New("backend down") }, nil)
 	code, body := get(t, h, "/readyz")
-	if code != http.StatusServiceUnavailable || !strings.Contains(body, "webdav down") {
+	if code != http.StatusServiceUnavailable || !strings.Contains(body, "backend down") {
 		t.Fatalf("/readyz = %d %q, want 503 with the reason", code, body)
 	}
 

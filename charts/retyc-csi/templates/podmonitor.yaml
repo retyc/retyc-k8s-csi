@@ -1,17 +1,22 @@
 {{- /*
-Prometheus Operator scrape of both driver components on their HTTP port. The node plugin's
-/metrics also carries every supervised `retyc webdav serve` (retyc_cli_*) and
-retyc_csi_webdav_server_up, labeled with the identity key and the tenant's namespace.
+Prometheus Operator scrapes: both driver components on their HTTP port, and the mount pods (created
+by the node plugin, not by Helm) on the CLI's metrics port.
 */ -}}
 {{- if .Values.metrics.podMonitor.enabled }}
+{{- $pm := .Values.metrics.podMonitor }}
+{{- $endpoint := dict }}
+{{- with $pm.interval }}{{ $_ := set $endpoint "interval" . }}{{ end }}
+{{- with $pm.scrapeTimeout }}{{ $_ := set $endpoint "scrapeTimeout" . }}{{ end }}
+{{- with $pm.relabelings }}{{ $_ := set $endpoint "relabelings" . }}{{ end }}
+{{- with $pm.metricRelabelings }}{{ $_ := set $endpoint "metricRelabelings" . }}{{ end }}
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:
   name: {{ include "retyc-csi.fullname" . }}
-  namespace: {{ .Values.metrics.podMonitor.namespace | default .Release.Namespace }}
+  namespace: {{ $pm.namespace | default .Release.Namespace }}
   labels:
     {{- include "retyc-csi.labels" . | nindent 4 }}
-    {{- with .Values.metrics.podMonitor.labels }}
+    {{- with $pm.labels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
 spec:
@@ -22,20 +27,28 @@ spec:
     matchLabels:
       {{- include "retyc-csi.selectorLabels" . | nindent 6 }}
   podMetricsEndpoints:
-    - port: health
-      path: /metrics
-      {{- with .Values.metrics.podMonitor.interval }}
-      interval: {{ . }}
-      {{- end }}
-      {{- with .Values.metrics.podMonitor.scrapeTimeout }}
-      scrapeTimeout: {{ . }}
-      {{- end }}
-      {{- with .Values.metrics.podMonitor.relabelings }}
-      relabelings:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.metrics.podMonitor.metricRelabelings }}
-      metricRelabelings:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
+    - {{ merge (dict "port" "health" "path" "/metrics") $endpoint | toYaml | indent 6 | trim }}
+---
+# The mount pods: retycfs_*, the Go runtime and the process, one target
+# per volume and node (labels csi.retyc.com/volume, /node, /pvc, /namespace on the pod).
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "retyc-csi.fullname" . }}-mount
+  namespace: {{ $pm.namespace | default .Release.Namespace }}
+  labels:
+    {{- include "retyc-csi.labels" . | nindent 4 }}
+    {{- with $pm.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: retyc-mount
+      app.kubernetes.io/managed-by: retyc-k8s-csi
+  podMetricsEndpoints:
+    - {{ merge (dict "port" "metrics" "path" "/metrics") $endpoint | toYaml | indent 6 | trim }}
 {{- end }}

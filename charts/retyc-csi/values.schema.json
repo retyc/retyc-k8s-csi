@@ -78,6 +78,7 @@
       "type": "object",
       "properties": {
         "replicas": { "type": "integer", "minimum": 0 },
+        "hostAliases": { "type": "array", "items": { "type": "object" } },
         "extraArgs": { "type": "array", "items": { "type": "string" } },
         "extraEnv": { "type": "array", "items": { "type": "object" } },
         "extraVolumes": { "type": "array", "items": { "type": "object" } },
@@ -88,8 +89,17 @@
         "nodeSelector": { "type": "object" },
         "tolerations": { "type": "array" },
         "affinity": { "type": "object" },
+        "topologySpreadConstraints": { "type": "array", "items": { "type": "object" } },
         "priorityClassName": { "type": "string" },
         "provisioner": {
+          "type": "object",
+          "properties": {
+            "image": { "$ref": "#/$defs/sidecarImage" },
+            "extraArgs": { "type": "array", "items": { "type": "string" } },
+            "resources": { "type": "object" }
+          }
+        },
+        "resizer": {
           "type": "object",
           "properties": {
             "image": { "$ref": "#/$defs/sidecarImage" },
@@ -103,8 +113,6 @@
       "type": "object",
       "properties": {
         "kubeletDir": { "type": "string", "pattern": "^/" },
-        "webdavPort": { "type": "integer", "minimum": 1024, "maximum": 65535 },
-        "stateDir": { "type": "string", "pattern": "^/" },
         "extraArgs": { "type": "array", "items": { "type": "string" } },
         "extraEnv": { "type": "array", "items": { "type": "object" } },
         "extraVolumes": { "type": "array", "items": { "type": "object" } },
@@ -125,7 +133,62 @@
           }
         }
       }
-    }
+    },
+    "mount": {
+      "type": "object",
+      "properties": {
+        "image": { "$ref": "#/$defs/sidecarImage" },
+        "imagePullSecrets": { "type": "array", "items": { "type": "object" } },
+        "extraEnv": { "type": "array", "items": { "type": "object" } },
+        "hostAliases": { "type": "array", "items": { "type": "object" } },
+        "hostPID": { "type": "boolean" },
+        "resources": { "type": "object" },
+        "drainTimeout": { "type": "string", "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$" },
+        "priorityClassName": { "type": "string" },
+        "spoolDir": { "type": "string", "pattern": "^/" }
+      }
+    },
+    "cache": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "store": { "type": "string", "enum": ["memory", "redis"] },
+        "highConfidentiality": { "type": "boolean" },
+        "redis": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "subchart": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "password": { "type": "string", "pattern": "^[A-Za-z0-9._~-]*$" },
+                "existingSecret": { "type": "string" }
+              }
+            },
+            "external": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "url": { "type": "string", "pattern": "^(rediss?://.+)?$" },
+                "existingSecret": { "type": "string" },
+                "existingSecretKey": { "type": "string", "minLength": 1 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "admissionPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "failurePolicy": { "type": "string", "enum": ["Fail", "Ignore"] }
+      }
+    },
+    "redis": { "type": "object", "description": "Values of the CloudPirates Redis subchart, checked by its own schema." }
   },
   "$defs": {
     "serviceAccount": {

@@ -1,0 +1,32 @@
+# Configuration of the mount pods, read by the node plugin at start (--mount-config): a change rolls
+# the node plugin (checksum annotation), which cuts no mount, and applies to the mount pods created
+# from then on. No secret in here: the Redis URL reaches the node plugin from a Secret.
+{{- $m := .Values.mount }}
+{{- $cfg := dict
+  "image" (printf "%s:%s" $m.image.repository $m.image.tag)
+  "imagePullPolicy" $m.image.pullPolicy
+  "imagePullSecrets" ($m.imagePullSecrets | default list)
+  "extraEnv" ($m.extraEnv | default list)
+  "hostAliases" ($m.hostAliases | default list)
+  "hostPID" $m.hostPID
+  "resources" ($m.resources | default dict)
+  "drainTimeout" ($m.drainTimeout | toString)
+  "priorityClassName" ($m.priorityClassName | default "")
+  "kubeletDir" .Values.node.kubeletDir
+  "spoolDir" $m.spoolDir
+}}
+{{- /* The Redis URL itself comes from a Secret (RETYC_CACHE_REDIS_URL in the node plugin's env). */}}
+{{- if eq .Values.cache.store "redis" }}
+{{- $_ := set $cfg "redis" (dict "highConfidentiality" .Values.cache.highConfidentiality) }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "retyc-csi.fullname" . }}-mount-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "retyc-csi.labels" . | nindent 4 }}
+    app.kubernetes.io/component: node
+data:
+  mount.json: |
+    {{- $cfg | toPrettyJson | nindent 4 }}

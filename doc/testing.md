@@ -1,24 +1,51 @@
 # Testing
 
-Four stages, cheapest first. Each one validates an assumption the next one depends on, so don't
-skip straight to the cluster.
+Two stages, cheapest first:
 
 | Stage | What it proves | Runs |
 |-------|----------------|------|
-| 1. Manual WebDAV + davfs2 | The storage path works at all, and how consistent it is | in the VM, as root |
-| 2. Unit tests + real CLI | The `retyc` exec wrapper decodes what the real CLI prints | on the host |
-| 3. csi-sanity (optional) | gRPC conformance of the Controller/Node services | in the VM, as root |
-| 4. Single-node k3s | The whole thing: mount propagation, FUSE, Retain, per-tenant identities | in the VM, driven from the host |
+| 1. Unit tests, lint | The driver's logic against fake Kubernetes clients and a fake `retyc`; the chart renders | on the host |
+| 2. End to end on k3s | The whole thing: mount pods, RetycFS, mount propagation, recovery, admission policy, Redis | in a Vagrant VM, driven from the host |
 
-"The VM" is one Debian 13 (trixie) machine running k3s, built by the `Vagrantfile` at the repo
-root on top of libvirt/KVM and driven through `make vm-*`. Stages 1 and 3 need a kernel you
-control (`/dev/fuse`, `CAP_SYS_ADMIN`, real mounts) — `mount.davfs` dies with SIGABRT inside a
-sandboxed shell — so build the VM first, even if you only care about stage 1.
+"The VM" is one Debian 13 (trixie) machine running k3s, built by the `Vagrantfile` at the repo root on top of
+libvirt/KVM and driven through `make vm-*`. RetycFS mounts, `Bidirectional` propagation and privileged pods need a kernel
+you control, which a sandboxed shell or a CI runner is not.
 
-Everything mutating talks to a **real Retyc account**: use a test account, and check
-`retyc --json user quota` before/after — stages 1, 3 and 4 create and delete datarooms.
+Everything mutating talks to a **real Retyc API** and creates and deletes datarooms: use a test account, and check
+`retyc --json user quota` before and after.
 
-## Prerequisites
+## Stage 1: unit tests and lint
+
+On the host:
+
+```sh
+make lint         # golangci-lint, same rules as retyc-cli (.golangci.yml)
+make test         # go test -race ./...
+make helm-lint    # helm dependency build, helm lint, CLI version check, three renders
+```
+
+- `internal/mountpod` (pod spec, Secrets, finalizer, backoff, `mount.json`) and `internal/driver` (stage, unstage,
+  recovery, the pod watch, the controller) are tested with client-go's fake clientset and a fake mount table.
+- `internal/retycclient` is tested against a fake `retyc` script that reproduces the real CLI's stdout and stderr,
+  spinner escapes included. When retyc-cli changes its JSON shapes, capture them again and update the fixtures:
+
+  ```sh
+  retyc --json dataroom create --title fixture-check --storage-capacity 20GiB --versioning=true
+  retyc --json dataroom set retyc://<id> --storage-capacity 30GiB -y
+  retyc --json dataroom ls | head -20
+  retyc --json user quota
+  retyc --json dataroom rm retyc://<id> -y
+  retyc --json dataroom rm retyc://00000000-0000-0000-0000-000000000000 -y   # exit 1, a 404 on stderr
+  ```
+
+- `make helm-lint` runs `helm dependency build charts/retyc-csi` first: the Redis subchart is a dependency, even when
+  disabled, and `helm template` or `helm install` of the source chart fails without it.
+- `.github/scripts/check-cli-version.sh` checks that the Dockerfile's `RETYC_CLI_VERSION` and the chart's
+  `mount.image.tag` name the same retyc-cli.
+
+## Stage 2: end to end on k3s
+
+### Prerequisites
 
 On the host:
 
@@ -28,317 +55,344 @@ sudo apt-get install -y vagrant libvirt-daemon-system qemu-kvm
 vagrant plugin install vagrant-libvirt
 sudo usermod -aG libvirt "$USER"
 
-# retyc-cli (released binary or your own build), authenticated. `make vm-up` copies this exact
-# binary into the VM, so whatever you test with in the VM is what you have on the host.
+# retyc-cli, authenticated against the API you test with, and a long-lived offline token:
 retyc auth status --json
-
-# A long-lived offline token for non-interactive use (printed once; store it as a secret):
 retyc auth login --offline
-
-# The passphrase of your AGE key — never on the command line, read it into the environment:
-read -rs RETYC_KEY_PASSPHRASE && export RETYC_KEY_PASSPHRASE
-export RETYC_TOKEN=<offline token>
 ```
 
 Then the VM:
 
 ```sh
-make vm-up        # vagrant up (box download + k3s install on first run, a few minutes) + retyc copy
-make vm-ssh       # a shell inside; kubectl works without sudo there
+make vm-up        # vagrant up (box download + k3s install on first run, a few minutes), then copies retyc in
+make vm-ssh       # a shell inside; kubectl and helm work without sudo there
 ```
 
 | Target | Does |
 |--------|------|
 | `make vm-up` | `vagrant up --provider=libvirt`, then `make vm-retyc` |
-| `make vm-retyc` | Copies the host's `retyc` into the VM (`RETYC_BIN=…` to pick another) |
+| `make vm-retyc` | copies the host's `retyc` into the VM (`RETYC_BIN=...` to pick another) |
 | `make vm-load` | `docker save` the driver image into k3s' containerd |
-| `make vm-secret` | Creates the `retyc-csi-credentials` Secret from `RETYC_TOKEN`/`RETYC_KEY_PASSPHRASE` |
-| `make vm-helm` | `vagrant rsync` + `helm upgrade --install` of the chart in the VM with `examples/vagrant-values.yaml` (`:dev` image, that Secret, traces to Jaeger; `VM_VALUES=…` to pick another file) |
-| `make vm-restart` | Restarts controller + node plugin (needed after every `vm-load`: the `:dev` tag never triggers a rollout by itself) |
-| `make vm-ssh` | `vagrant ssh` |
-| `make vm-destroy` | `vagrant destroy -f` (the box stays cached) |
+| `make cli-image` | builds the development retyc-cli image `CLI_IMAGE` (default `retyc-cli:retycfs-v1.5.0-beta2`) from the tag `CLI_VERSION` (default `v1.5.0-beta2`) of the checkout `CLI_SRC` (default `../retyc_cli`), without `-tags prod` (see below) |
+| `make vm-load-cli` | the same as `vm-load` for the retyc-cli image of the mount pods (`CLI_IMAGE=...`, default `retyc-cli:retycfs-v1.5.0-beta2`, as in `examples/vagrant-values.yaml`) |
+| `make vm-secret` | creates the `retyc-csi-credentials` Secret in `kube-system` from `RETYC_TOKEN` and `RETYC_KEY_PASSPHRASE` |
+| `make vm-helm` | `vagrant rsync`, then `helm upgrade --install` of the chart in `kube-system` with `examples/vagrant-values.yaml` (`VM_VALUES=...` for another file) |
+| `make vm-restart` | restarts the controller and the node plugin, needed after a `vm-load` of the same tag |
+| `make vm-ssh` / `make vm-destroy` | `vagrant ssh` / `vagrant destroy -f` (the box stays cached) |
 
-The VM has 2 vCPUs, 4 GB RAM, NAT to the internet (it must reach `api.retyc.com`), `davfs2`
-pre-configured like the container image (`/etc/davfs2/davfs2.conf`), k3s with its bundled Traefik,
-Helm, and a Jaeger all-in-one (in-memory) receiving the retyc CLI's traces. Traefik's `web`
-entrypoint (the examples' ingresses) is forwarded to http://localhost:18080, the Jaeger UI to
-http://localhost:18081. Nothing in the Makefile touches a cluster from the host: every `vm-*` target runs its
-`kubectl`/`helm` inside the VM over `vagrant ssh`. The repo is rsynced one-way to `/vagrant` (`vagrant rsync` to refresh it after edits).
-Anything stateful you want to keep across `vagrant destroy` belongs on the host. The
-`[fog][WARNING] Unrecognized arguments: libvirt_ip_command` line every vagrant command prints is
-vagrant-libvirt 0.12.x noise, not an error.
+A VM provisioned before the Vagrantfile installed `fuse3` has no `fusermount3`: run `vagrant provision` (or
+`sudo apt-get install -y fuse3` in the VM).
 
-## Stage 1 — WebDAV + davfs2 by hand
+The VM has 2 vCPUs, 4 GB of RAM, NAT to the internet, `fuse3` with the `fuse` module loaded at boot (`/dev/fuse`
+for the mount pods), k3s with its bundled Traefik, Helm, and a Jaeger all-in-one
+receiving the CLI's traces (UI on http://localhost:18081). Nothing in the Makefile touches a cluster from the host:
+every `vm-*` target runs `kubectl`/`helm` inside the VM over `vagrant ssh`. The repo is rsynced one-way to `/vagrant`
+(`vagrant rsync` after edits). The `[fog][WARNING] Unrecognized arguments: libvirt_ip_command` line every vagrant
+command prints is vagrant-libvirt 0.12.x noise.
 
-This is the riskiest assumption in the design (an eventually consistent RWX filesystem, see
-[architecture.md](architecture.md#consistency)), so test it before anything else.
+### Against the development API
 
-```sh
-make vm-ssh
-read -rs RETYC_KEY_PASSPHRASE && export RETYC_KEY_PASSPHRASE
-export RETYC_TOKEN=<offline token>
+A retyc-cli release is a `prod` build, which does not honour `RETYC_INSECURE`: the tests run against the development
+API, with a CLI built locally without that build tag.
 
-# Pick or create a dataroom; the WebDAV path is its *title*, not its ID.
-retyc --json dataroom create --title csi-manual-test
+| | Value |
+|---|---|
+| API | `https://api.triplesfer.traefik.me`, the default of a dev build of the CLI (`RETYC_API_BASE_URL`) |
+| CLI image | built from a retyc-cli tag (here `v1.5.0-beta2`) without the `prod` tag, tagged `retyc-cli:retycfs-v1.5.0-beta2` |
+| Certificate | `RETYC_INSECURE=true`, which only a dev build of the CLI honours |
+| Credentials | an offline token and the key passphrase of a test account, in an untracked file at the repo root (`.env.dev`, mode 0600, excluded from git). **Never in a tracked file.** |
 
-# 1. Serve
-retyc webdav serve --addr 127.0.0.1:8888 &
+1. **Build a development CLI with a version.** A CLI built without a semantic version is refused by the API with
+   `426 Retyc CLI version could not be determined`, and retyc-cli's Dockerfile builds with `-tags prod`, which ignores
+   `RETYC_INSECURE`. `make cli-image` builds an export of the tag `CLI_VERSION` from the retyc-cli checkout next to
+   this one (`CLI_SRC=...` for another), with a copy of the Dockerfile without that line: the checkout stays
+   untouched.
 
-# 2. Mount it twice, as two independent clients (this is what two nodes look like)
-sudo mkdir -p /mnt/a /mnt/b
-sudo mount -t davfs -o dir_mode=0777,file_mode=0666 http://127.0.0.1:8888/dataroom/csi-manual-test /mnt/a
-sudo mount -t davfs -o dir_mode=0777,file_mode=0666 http://127.0.0.1:8888/dataroom/csi-manual-test /mnt/b
+   ```sh
+   make cli-image                                              # CLI_VERSION=v1.5.0-beta2
+   docker run --rm retyc-cli:retycfs-v1.5.0-beta2 version      # retyc v1.5.0-beta2 (dev build)
+   ```
+
+   The command is `retyc version`; `retyc --version` is an unknown flag.
+
+2. **Build the driver** against that local CLI image (the controller embeds its binary), and load both images into
+   k3s, which pulls from no local registry:
+
+   ```sh
+   make image RETYC_CLI_IMAGE=retyc-cli RETYC_CLI_VERSION=retycfs-v1.5.0-beta2
+   make vm-load
+   make vm-load-cli
+   ```
+
+3. **Credentials and chart.** The dev API's names resolve to `127.0.0.1`, so `examples/vagrant-values.yaml` gives the
+   controller and the mount pods `hostAliases` to the host as seen from the VM (`192.168.121.1`) for
+   `api.triplesfer.traefik.me` and `auth.triplesfer.traefik.me`, plus `RETYC_API_BASE_URL` and `RETYC_INSECURE` in
+   `controller.extraEnv` and `mount.extraEnv`, and `retyc-cli:retycfs-v1.5.0-beta2` as `mount.image`.
+
+   ```sh
+   set -a; . ./.env.dev; set +a
+   make vm-secret
+   helm dependency build charts/retyc-csi    # the subchart travels with the rsync
+   make vm-helm
+   ```
+
+4. **Check** in the VM:
+
+   ```sh
+   kubectl -n kube-system get pods -l app.kubernetes.io/name=retyc-csi    # controller 3/3, node 2/2
+   ```
+
+The token of `.env.dev` is short-lived. Once it has expired, the controller stays `2/3`: its readiness probe logs
+`retyc not authenticated: no_token` (the API refuses the token, and the container has no other login), and no claim is
+provisioned. Mint a new one, then `make vm-secret` and `make vm-restart`. Iterating on the driver
+is `make image ... vm-load vm-restart`; on the chart, `make vm-helm`.
+
+With a released CLI and the production API, skip the dev settings: `make image`, `make vm-load`, `make vm-secret`,
+`make vm-helm` with a values file that only sets `image.tag: dev` and `credentials.existingSecret`.
+
+### A CLI pod in the dev cluster
+
+To call `retyc` with the cluster's credentials (list or remove a dataroom, check the quota) without the host's login,
+run a one-shot pod: the Secret is the driver's, `hostAliases` and `RETYC_INSECURE` are the dev API settings.
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: retyc-cli
+  namespace: kube-system
+spec:
+  restartPolicy: Never
+  hostAliases:
+    - ip: 192.168.121.1
+      hostnames: [api.triplesfer.traefik.me, auth.triplesfer.traefik.me]
+  containers:
+    - name: cli
+      image: retyc-cli:retycfs-v1.5.0-beta2
+      imagePullPolicy: IfNotPresent
+      args: [--json, dataroom, ls]
+      env:
+        - {name: RETYC_API_BASE_URL, value: "https://api.triplesfer.traefik.me"}
+        - {name: RETYC_INSECURE, value: "true"}
+        - {name: RETYC_KEYRING_ENABLED, value: "false"}
+      envFrom:
+        - secretRef: {name: retyc-csi-credentials}
 ```
 
-Things to measure and write down:
-
 ```sh
-# Write visibility latency between two mounts (expect a few seconds: davfs2 dir_refresh +
-# retyc-cli's 30s listing cache, invalidated by mutations through the same server).
-date > /mnt/a/hello.txt; time sh -c 'until cat /mnt/b/hello.txt 2>/dev/null; do sleep 0.5; done'
-
-# Overwrite semantics: a PUT on an existing name creates a new *version* server-side.
-echo v2 > /mnt/a/hello.txt; sleep 3; cat /mnt/b/hello.txt
-
-# Concurrent writers to the same file (there is no cross-mount locking — last PUT wins).
-(for i in $(seq 20); do echo a$i >> /mnt/a/race.txt; done) &
-(for i in $(seq 20); do echo b$i >> /mnt/b/race.txt; done) & wait; sleep 3; wc -l /mnt/a/race.txt
-
-# Non-root access (what a pod with runAsUser sees):
-sudo -u nobody sh -c 'echo ok > /mnt/a/nobody.txt && cat /mnt/a/nobody.txt'
-
-# mkdir / rename / delete
-mkdir /mnt/a/dir && mv /mnt/a/hello.txt /mnt/a/dir/ && rm -r /mnt/a/dir
-
-# Server restart while mounted (the node plugin restarts it on crash): kill and restart
-# `retyc webdav serve`, then check the mounts recover on the next access.
+kubectl apply -f retyc-cli.yaml && kubectl -n kube-system logs -f retyc-cli; kubectl -n kube-system delete pod retyc-cli
 ```
 
-Cleanup: `sudo umount /mnt/a /mnt/b; kill %1; retyc --json dataroom rm retyc://<id> -y`.
-
-Also try the web app or another client (rclone, Finder) against the same dataroom while mounted:
-changes made *outside* the local WebDAV server take up to ~1 min to appear (retyc-cli caches).
-
-## Stage 2 — Unit tests and the real CLI
-
-On the host:
+Before the first scenario, list the datarooms the account already has and leave them alone: the tests create and delete
+only the `pvc-...` ones, and a leftover from an earlier run is the one to remove by hand.
 
 ```sh
-make lint    # golangci-lint, same rules as retyc-cli (.golangci.yml)
-make test    # go test -race ./...
+retyc --json dataroom ls > /tmp/datarooms-before.json     # (host) keep it; compare at the end
 ```
 
-`internal/retycclient` is tested against a fake `retyc` script that reproduces the real CLI's
-stdout/stderr, including the spinner's ANSI escapes on stderr. When `retyc-cli` changes its JSON
-shapes, re-capture them and update the fixtures:
+`make vm-helm` runs `helm upgrade --install` **without** `--reuse-values`: it puts the release back on
+`examples/vagrant-values.yaml`, dropping what the scenarios `--set` (Redis, replicas). Re-apply them after a `vm-helm`.
+
+### Scenarios
+
+In the VM, from `/vagrant`. Mount pods live in `kube-system`; `mp` below lists them:
 
 ```sh
-retyc --json dataroom create --title fixture-check        # → {"id","title"}
-retyc --json dataroom ls | head -20                        # → {"items":[...],"total","page","pages"}
-retyc --json user quota                                    # → api.UserQuota
-retyc --json dataroom rm retyc://<id> -y                   # → {"dataroom_id","uri","deleted_count"}
-retyc --json dataroom rm retyc://00000000-0000-0000-0000-000000000000 -y   # → exit 1, stderr JSON 404
+alias mp='kubectl -n kube-system get pods -l app.kubernetes.io/name=retyc-mount -o wide -L csi.retyc.com/pvc'
 ```
 
-## Stage 3 — csi-sanity (optional, cheap once the VM exists)
-
-[csi-sanity](https://github.com/kubernetes-csi/csi-test) drives the gRPC API the way kubelet and
-the sidecars do, without a cluster. The Node service mounts for real, so it runs as root in the
-VM. It creates and deletes real datarooms.
-
-Build both binaries on the host (the VM has no Go toolchain) and ship them through the synced
-folder:
+**1. A claim without `uid` is refused.**
 
 ```sh
-make build
-GOBIN=$PWD/dist go install github.com/kubernetes-csi/csi-test/v5/cmd/csi-sanity@latest
-vagrant rsync   # /vagrant is one-way host→guest; rsync__exclude drops dist/ and the binary, so:
-vagrant ssh -c "sudo install -m 0755 /dev/stdin /usr/local/bin/retyc-k8s-csi" < retyc-k8s-csi
-vagrant ssh -c "sudo install -m 0755 /dev/stdin /usr/local/bin/csi-sanity"    < dist/csi-sanity
+sed '/annotations:/,/csi.retyc.com\/uid/d' examples/rwx-test.yaml | kubectl apply -f -
 ```
 
-In the VM (`make vm-ssh`, credentials exported as in stage 1):
+Expected: `denied request: ValidatingAdmissionPolicy ...: annotation csi.retyc.com/uid is required`. With
+`--set admissionPolicy.enabled=false`, the claim is created but stays `Pending`, with a `ProvisioningFailed` event
+`InvalidArgument ... annotation csi.retyc.com/uid is required`, and no dataroom is created.
+
+**2. A `1Gi` claim gets 20 GiB.**
 
 ```sh
-# Controller and node in two processes, two sockets (both need RETYC_TOKEN / RETYC_KEY_PASSPHRASE):
-sudo -E retyc-k8s-csi --mode=controller --endpoint=unix:///tmp/csi-ctrl.sock --retyc-bin=$(command -v retyc) &
-sudo -E retyc-k8s-csi --mode=node       --endpoint=unix:///tmp/csi-node.sock --retyc-bin=$(command -v retyc) &
-
-sudo -E csi-sanity \
-  --csi.controllerendpoint=/tmp/csi-ctrl.sock \
-  --csi.endpoint=/tmp/csi-node.sock \
-  --csi.mountdir=/tmp/csi-mnt --csi.stagingdir=/tmp/csi-stage \
-  --ginkgo.skip='(Snapshot|Expand|Block|ListVolumes|GetCapacity)'
+kubectl apply -f examples/rwx-test.yaml
+kubectl get pvc retyc-rwx-test -w                 # Bound, CAPACITY 20Gi
+retyc --json dataroom ls                          # (host) the pvc-... dataroom, storage capacity 21474836480
 ```
 
-Expected: everything under `Identity`, `Controller` (`CreateVolume`/`DeleteVolume`/
-`ValidateVolumeCapabilities`) and `Node` passes; skipped groups are features the driver
-deliberately doesn't advertise.
-
-## Stage 4 — Single-node k3s
-
-A privileged DaemonSet with `mountPropagation: Bidirectional` and FUSE needs a real Linux kernel
-you control; that's the VM. Everything below runs from the host unless stated otherwise.
-
-### 4.1 Build, load, deploy
-
-k3s doesn't pull from your local Docker daemon; the image is shipped over SSH into its containerd
-(the `:dev` tag gives `imagePullPolicy: IfNotPresent`, so no registry is involved).
+**3. The owner UID writes, another UID does not.** In `rwx-test.yaml`, the writer runs as 1000 (the claim's `uid`),
+the reader as 2000:
 
 ```sh
-make image          # optionally RETYC_CLI_VERSION=vX.Y.Z
-make vm-load        # docker save | k3s ctr images import
-make vm-secret      # retyc-csi-credentials from $RETYC_TOKEN / $RETYC_KEY_PASSPHRASE
-make vm-helm        # rsync + helm upgrade --install in the VM
-
-vagrant ssh -c "kubectl -n kube-system get pods -l 'app in (retyc-csi-controller, retyc-csi-node)' -w"
+kubectl logs -f retyc-reader                                    # the writer's lines every 5 s
+kubectl exec retyc-writer -- ls -ln /data                       # owner 1000:1000
+kubectl exec retyc-reader -- touch /data/x                      # Permission denied
 ```
 
-Both pods must be `Running` and `2/2` ready (probes: [configuration.md](configuration.md#probes-and-resources)).
-A `1/2` pod is the driver refusing to be ready; kubelet's event only says `503`, the reason is on
-`/readyz` and in the driver's logs:
+**4. Two pods, one mount pod.** Both pods are on the single node: one mount pod for the volume, one RetycFS mount on the
+staging path, one bind per pod.
 
 ```sh
-curl -s "http://$(kubectl -n kube-system get pod -l app=retyc-csi-node -o jsonpath='{.items[0].status.podIP}'):9808/readyz"
-kubectl -n kube-system logs ds/retyc-csi-node -c retyc-csi-node | grep '/readyz'
+mp                                                              # one retyc-mount-..., 1/1 Running
+findmnt -t fuse.retycfs                                         # source retyc://<id>: globalmount + 2 target paths
 ```
 
-If a pod isn't `Running` at all (in the VM):
+**5. Stats.** `NodeGetVolumeStats` serves the mount's `statfs`:
 
 ```sh
-kubectl -n kube-system logs deploy/retyc-csi-controller -c retyc-csi-controller
-kubectl -n kube-system logs ds/retyc-csi-node -c retyc-csi-node        # includes `retyc webdav serve` output
-kubectl -n kube-system logs ds/retyc-csi-node -c node-driver-registrar
-kubectl get csidriver csi.retyc.com                                    # attachRequired must be false
+kubectl get --raw "/api/v1/nodes/$(hostname)/proxy/stats/summary" | jq '.pods[].volume[]? | select(.pvcRef.name=="retyc-rwx-test")'
 ```
 
-Iterating on the driver (or picking up a new `retyc-cli` image) is `make image vm-load vm-restart`.
-
-### 4.2 Provision and use an RWX volume
-
-In the VM:
+**6. Expand.**
 
 ```sh
-kubectl apply -f /vagrant/examples/rwx-test.yaml
-kubectl get pvc retyc-rwx-test -w                 # Pending → Bound (a dataroom was created)
-kubectl get pods retyc-writer retyc-reader -w      # both Running
-kubectl logs -f retyc-reader                       # lines written by the writer show up every 5s
+kubectl patch pvc retyc-rwx-test -p '{"spec":{"resources":{"requests":{"storage":"30Gi"}}}}'
+kubectl get pvc retyc-rwx-test -w                 # CAPACITY 30Gi, no node step
+retyc --json dataroom ls                          # (host) 32212254720
+kubectl exec retyc-writer -- df -h /data          # the new size within a minute (cached dataroom stats)
 ```
 
-Cross-check from the host that the volume is a real dataroom:
+**7. `kill -9` of the mount process.** The volume comes back in about 10 to 18 s, without restarting the pods (they
+mount it with `HostToContainer`). The process is `/retyc fs mount ...`, so match on its command line (`-x retyc` finds
+nothing):
 
 ```sh
-retyc --json dataroom ls | grep -B1 -A3 '"pvc-'     # title == PV name
+sudo pkill -9 -f '^/retyc fs mount'               # every mount process of the node: fine in the VM
+mp -w                                             # the pod exits (137), a new one is Running then 1/1
+kubectl exec retyc-writer -- ls /data             # Transport endpoint is not connected, then works again
+kubectl -n kube-system logs ds/retyc-csi-node -c retyc-csi-node | grep recovery:   # recreated, rebinding
 ```
 
-Then inspect the node side in the VM:
+A consumer container may restart meanwhile, depending on its command: the writer of `rwx-test.yaml` fails its `date >>`
+while the mount is dead and keeps looping, a command that exits on error restarts with its pod's policy.
+
+**8. Node plugin restart.** No mount is cut:
 
 ```sh
-mount | grep dataroom                          # type is `fuse`, source is the WebDAV URL: one per PV under
-                                              # /var/lib/kubelet/plugins/.../globalmount + one bind mount per pod
-kubectl exec retyc-reader -- id                # uid=1000
-kubectl exec retyc-reader -- sh -c 'echo hi > /data/from-uid-1000.txt && cat /data/from-uid-1000.txt'   # non-root create+read
-kubectl exec retyc-writer -- ls -ln /data      # root's log.txt is 0644: the kernel applied the writer's umask
-                                              # to the create, and davfs2 remembers that mode (see README)
+kubectl -n kube-system delete pod -l app.kubernetes.io/name=retyc-csi,app.kubernetes.io/component=node
+mp                                                # same mount pod, same age
+kubectl logs --tail 3 retyc-reader                # no gap in the writer's lines
 ```
 
-### 4.3 Failure modes worth exercising
-
-In the VM:
+**9. Unstage.** Deleting the pods unstages the volume: the mount pod drains and is deleted, the staging path is
+unmounted.
 
 ```sh
-# Node plugin restart: the FUSE daemons die with the container, the new plugin remounts them
-# before it turns Ready; the pods (mountPropagation: HostToContainer) see the volume again.
-kubectl -n kube-system delete pod -l app=retyc-csi-node
-kubectl -n kube-system rollout status ds/retyc-csi-node
-kubectl exec retyc-writer -- ls /data               # works, no pod restart
-kubectl -n kube-system logs ds/retyc-csi-node -c retyc-csi-node | grep recovery:
-
-# One davfs2 daemon killed: remounted within 30 s (-x: `pkill -f` would match this shell).
-sudo pkill -9 -x mount.davfs
-sleep 35; kubectl exec retyc-writer -- ls /data
-
-# Bad credentials: `retyc webdav serve` exits within a second ("key passphrase check failed:
-# wrong key passphrase") and is restarted every 5s; the node pod goes 1/2 with that message on
-# /readyz and in its logs (same for the controller with a bad token, where the Deployment keeps
-# the previous, working pod until the new one is Ready). A new mount fails
-# with `Unavailable ... local webdav server not ready` after 30s instead of hanging, and the pod
-# sits in ContainerCreating. Pods stuck that way recover on their own once the real credentials
-# are back and the DaemonSet restarted — kubelet just retries MountDevice.
-# ... then `make vm-secret` from the host and restart again to put the real ones back.
+kubectl delete pod retyc-writer retyc-reader
+mp -w                                             # Terminating, then gone
+findmnt -t fuse.retycfs                           # nothing
+kubectl -n kube-system logs ds/retyc-csi-node -c retyc-csi-node | grep -E 'exited cleanly|unstaged'
+kubectl -n kube-system get secrets | grep retyc-mount   # gone with their pods
 ```
 
-### 4.4 Retain, and re-adopting a dataroom
-
-Same claim against the `retyc-rwx-retain` class: deleting the PVC must leave both the PV
-(`Released`) and the dataroom behind, and a static PV must bring the data back. In the VM:
+**10. Admission policy.** Each of these is refused with the annotation's expected format:
 
 ```sh
-sed 's/storageClassName: retyc-rwx$/storageClassName: retyc-rwx-retain/' /vagrant/examples/rwx-test.yaml | kubectl apply -f -
-kubectl wait --for=condition=Ready pod/retyc-writer --timeout=120s
-id=$(kubectl get pv -o jsonpath='{.items[?(@.spec.claimRef.name=="retyc-rwx-test")].spec.csi.volumeHandle}')
-title=$(kubectl get pv -o jsonpath='{.items[?(@.spec.claimRef.name=="retyc-rwx-test")].spec.csi.volumeAttributes.title}')
-
-kubectl delete pod retyc-writer retyc-reader && kubectl delete pvc retyc-rwx-test
-kubectl get pv                                        # STATUS Released, RECLAIM POLICY Retain
-retyc --json dataroom ls | grep -c "$title"           # (host) 1 — DeleteVolume was never called
-kubectl delete pv "$title"                            # the dataroom still exists afterwards
-
-sed "s/REPLACE-WITH-DATAROOM-ID.*/$id/; s/REPLACE-WITH-DATAROOM-TITLE.*/$title/" /vagrant/examples/static-pv.yaml | kubectl apply -f -
-kubectl get pvc retyc-adopted                         # Bound, no new dataroom created
-kubectl run adopted --image=busybox:1.36 --restart=Never --overrides='{"spec":{"containers":[{"name":"c","image":"busybox:1.36","command":["cat","/data/log.txt"],"volumeMounts":[{"name":"d","mountPath":"/data"}]}],"volumes":[{"name":"d","persistentVolumeClaim":{"claimName":"retyc-adopted"}}]}}'
-kubectl logs adopted                                  # the writer's lines are back
-kubectl delete pod adopted; kubectl delete pvc retyc-adopted; kubectl delete pv retyc-adopted
-retyc --json dataroom rm retyc://$id -y               # (host) manual cleanup is the point of Retain
+kubectl annotate pvc retyc-rwx-test csi.retyc.com/uid=abc --overwrite
+kubectl annotate pvc retyc-rwx-test csi.retyc.com/cache-ttl=-1s
+kubectl annotate pvc retyc-rwx-test csi.retyc.com/local-file='none *.tmp'
+kubectl annotate pvc retyc-rwx-test csi.retyc.com/mount-memory-limit=0
+kubectl annotate pvc retyc-rwx-test csi.retyc.com/uid-                     # removing the uid
 ```
 
-### 4.5 Per-tenant identity
+A valid change (`csi.retyc.com/uid=2000 --overwrite`) is accepted, and applies at the next mount.
 
-A namespace with its own Secret must get its own WebDAV server and its own dataroom. Servers are keyed by the
-credentials, so a Secret identical to the driver's shares the default server; use a second account, or the same token
-with a wrong passphrase to see a separate (crash-looping) server on `:8889` while the other tenants keep working. In
-the VM:
+**11. Redis.**
 
 ```sh
-# Namespace, PVC and pod from the example, then a real Secret copied from the driver's:
-awk 'BEGIN{RS="---\n"; ORS="---\n"} NR!=2' /vagrant/examples/tenant.yaml | kubectl apply -f -
-kubectl get secret -n kube-system retyc-csi-credentials -o json \
-  | jq '{apiVersion, kind, type, metadata:{name:"retyc-credentials", namespace:"team-a"}, data}' | kubectl apply -f -
-kubectl -n team-a wait --for=condition=Ready pod/team-writer --timeout=180s
-
-kubectl get pv                                                    # one PV in retyc-rwx-tenant, Retain
-kubectl -n kube-system logs ds/retyc-csi-node -c retyc-csi-node | grep 'starting server'   # a second identity on :8889
-mount | grep -o 'http://127.0.0.1:[0-9]*/dataroom/[^ ]*'         # the tenant volume is mounted through that port
-kubectl -n kube-system exec ds/retyc-csi-node -c retyc-csi-node -- ls /var/lib/retyc-csi   # one state dir per identity
-
-kubectl delete ns team-a                                          # PV Released, dataroom kept (Retain)
-kubectl -n kube-system logs ds/retyc-csi-node -c retyc-csi-node | grep 'stopping server'   # tenant server gone
+helm upgrade retyc-csi /vagrant/charts/retyc-csi -n kube-system --reuse-values -f /vagrant/examples/redis-values.yaml --wait
+kubectl apply -f examples/rwx-test.yaml           # a new stage: the mount pod uses the new cache settings
+kubectl -n kube-system get pod -l app.kubernetes.io/name=retyc-mount -o jsonpath='{.items[0].spec.containers[0].args}'   # --cache-store=redis --cache-redis-high-confidentiality
+kubectl -n kube-system exec retyc-csi-redis-0 -- sh -c 'redis-cli -a "$REDIS_PASSWORD" --no-auth-warning dbsize'
 ```
 
-### 4.6 Teardown — and verify the dataroom is gone
+The pod and variable names of the Redis subchart may differ between its versions: `kubectl -n kube-system get pods -l
+app.kubernetes.io/name=redis`. A volume already mounted before the upgrade keeps its memory cache until it is
+remounted (`MountConfigChanged`).
+
+**12. Leader election.**
 
 ```sh
-vagrant ssh -c "kubectl delete -f /vagrant/examples/rwx-test.yaml"
-vagrant ssh -c "kubectl get pv"               # released PV disappears (reclaimPolicy: Delete)
-retyc --json dataroom ls | grep -c '"pvc-'    # 0 — DeleteVolume actually removed the dataroom
-retyc --json user quota                       # count_dataroom back to where it started
+helm upgrade retyc-csi /vagrant/charts/retyc-csi -n kube-system --reuse-values --set controller.replicas=2 --wait
+kubectl -n kube-system get lease | grep csi-retyc-com   # the provisioner's and the resizer's leases, one holder each
+kubectl -n kube-system delete pod <the holder>          # the other replica takes over
+kubectl apply -f examples/rwx-test.yaml                 # still provisioned
 ```
 
-`vagrant halt` to stop the VM and keep it, `make vm-destroy` to start fresh next time (the box
-stays cached in `~/.vagrant.d/boxes`, so the rebuild is only the k3s install).
+**13. `ReadWriteOncePod`.** A claim with `accessModes: [ReadWriteOncePod]`, mounted by two pods:
 
-## What "good" looks like
+```sh
+kubectl get events --field-selector involvedObject.name=<second pod>   # FailedScheduling ... ReadWriteOncePod access mode already in-use
+kubectl get pod <second pod>                                           # Pending until the first one is gone
+```
 
-- Stage 1: writes visible across mounts in single-digit seconds; non-root can write; no data
-  corruption on sequential use; concurrent appends to one file lose lines (expected — no locking).
-- Stage 4: PVC bound in < 30s, both pods running, reader sees writer's lines, dataroom appears
-  and disappears in `retyc dataroom ls` in lockstep with the PVC.
+The second pod stays `Pending` with `FailedScheduling ... node has pod using PersistentVolumeClaim with the same name
+and ReadWriteOncePod access mode already in-use`; the mount pod is the first pod's. The first Event of a pod can be a
+transient `unbound immediate PersistentVolumeClaims` while the claim is still being provisioned: it goes away once the
+claim is `Bound`.
 
-## Known gaps this doesn't cover
+**14. Tenant fail-closed.** A static PV of a tenant class (`retyc-rwx-tenant`) without `nodeStageSecretRef` must not be
+mounted with the driver's global identity. Take `examples/static-pv.yaml`, set `storageClassName: retyc-rwx-tenant`
+and a dataroom ID you created for the test, and leave the `nodeStageSecretRef` block commented out; a consumer pod
+then stays in `ContainerCreating`:
 
-- Multi-node clusters — cross-node visibility is only approximated by stage 1's two mounts
-  against one server. Real nodes each run their own `retyc webdav serve`, so changes made on
-  node A reach node B through the API only after A's cache invalidation *and* B's cache expiry
-  (up to ~30s + `dir_refresh`). A second VM joining the k3s server as an agent would cover it;
-  the `Vagrantfile` is single-machine on purpose for now.
-- Load/perf: every read is a chunk download + AGE decrypt; nothing here measures throughput.
+```sh
+kubectl describe pod <consumer>                  # FailedMount ... FailedPrecondition, refusing the driver's global identity for a tenant volume
+mp                                               # no mount pod was created
+```
+
+Uncomment `nodeStageSecretRef` with the Secret of `examples/tenant.yaml` (`retyc-credentials`, in the claim's
+namespace): the stage goes through.
+
+**15. Events on the claim.** `MountGaveUp`, `MountFailed`, `WritesLost` and `MountOOMKilled` are Events **of the PVC**, in the PVC's
+namespace (`kubectl describe pvc <claim>`, `kubectl get events -n <ns>`), not of the mount pod in `kube-system`.
+
+- `MountGaveUp`: put a **fake** token in the credentials Secret (the real one is never used for this), for instance with
+  a tenant Secret in a test namespace (`RETYC_TOKEN=fake`), and start a pod on a claim of that class. The mount pod
+  exits `77` three times (5 s, then 10 s apart); the claim gets one `MountGaveUp`, and the next stages fail at once with
+  `FailedPrecondition`. Restore the Secret, then see [troubleshooting.md](troubleshooting.md#events-on-the-claim) for the
+  end of the give-up.
+- `MountFailed` against `WritesLost`: a failure at start writes nothing and must not say otherwise. Provoke one without
+  risk with a Redis that does not answer, such as an unrouted address:
+
+  ```sh
+  helm upgrade retyc-csi /vagrant/charts/retyc-csi -n kube-system --reuse-values \
+    --set cache.store=redis --set cache.redis.subchart.enabled=false \
+    --set cache.redis.external.url=redis://10.255.255.1:6379
+  kubectl apply -f examples/rwx-test.yaml          # the mount pod exits 1 before it is ever ready
+  kubectl describe pvc retyc-rwx-test              # MountFailed ("failed before mounting it (nothing was written)")
+  ```
+
+  `WritesLost` is for a pod that exits `75` (or, with a CLI older than that code, `1` with an output that reports lost
+  files); it is not provoked on purpose (it needs a cut API during a drain). Put `cache.store=memory` back afterwards.
+- `MountOOMKilled`, without writing anything, on a claim in use by a pod that mounts it with
+  `mountPropagation: HostToContainer`:
+  - **OOM kill**: annotate the claim with `csi.retyc.com/mount-memory-limit: 200Mi`, under the ~270 MiB the key
+    unlocking takes at start, and remount it (restart the pod). The mount pod is killed `137` at each start; the claim
+    gets a `MountOOMKilled` "killed at its memory limit (200Mi)" for every kill. Remove the annotation and remount.
+    A walk alone (`ls -lR` of 85 000 files at `300Mi`) does not get there: the kernel reclaims, the cgroup stays at
+    its limit.
+  - **A kill nobody asked for**: `sudo kill -9 $(pgrep -f 'retyc fs mount')` on the node while the volume serves.
+    containerd reports `Error`, the claim gets a `MountOOMKilled` "killed (SIGKILL) while serving, most likely at
+    its memory limit", the pod is recreated, and the application reads again within ~10 s without a restart (its
+    mount was rebound). Without `HostToContainer`, it keeps `Transport endpoint is not connected` until restarted.
+
+### Teardown, and check the dataroom is gone
+
+```sh
+kubectl delete -f /vagrant/examples/rwx-test.yaml
+kubectl get pv                                  # the released PV disappears (reclaimPolicy: Delete)
+retyc --json dataroom ls | grep -c '"pvc-'      # (host) 0: DeleteVolume removed the dataroom
+retyc --json user quota                         # (host) count_dataroom back to where it started
+```
+
+`vagrant halt` stops the VM and keeps it; `make vm-destroy` starts fresh next time.
+
+## Known gaps
+
+- **csi-sanity** does not run against this driver as is: both modes need an in-cluster Kubernetes client, and
+  `CreateVolume` reads the claim named by `csi.storage.k8s.io/pvc/*` parameters. Running it would take a pod in the
+  cluster and test parameters naming a real claim.
+- **Multi-node**: the VM is a single node. Cross-node visibility (the cache TTL) and several mount pods of one volume
+  are not exercised; a second VM joining k3s as an agent would cover them.
+- **Drain**: what `kubectl drain` does to the mount pods (see [architecture.md](architecture.md#limitations)), and
+  kubelet's timeout on a `NodeUnstageVolume` that returns `Aborted` for a 5 min drain, are not covered.
+- **Load and throughput**: every read is a chunk download and an AGE decryption; nothing here measures it.

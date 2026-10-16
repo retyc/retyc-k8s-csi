@@ -55,23 +55,42 @@ jobs:
         with:
           version: v4.2.4   # "latest" still resolves to the 3.x line
 
+      # The Redis subchart (Chart.lock), pulled from Docker Hub's OCI registry.
+      - name: Dependencies
+        run: helm dependency build charts/retyc-csi
+
       - name: Lint (values schema included)
         run: helm lint charts/retyc-csi
 
-      - name: Render in every credential mode
+      # The controller's embedded retyc-cli and the mount pods' image must be the same release.
+      - name: retyc-cli version, Dockerfile vs chart
+        run: .github/scripts/check-cli-version.sh
+
+      - name: Render in every credential and cache mode
         run: |
           helm template x charts/retyc-csi --set credentials.token=t --set credentials.keyPassphrase=p > /tmp/managed.yaml
           helm template x charts/retyc-csi --set credentials.existingSecret=s > /tmp/existing.yaml
           helm template x charts/retyc-csi > /tmp/tenant-only.yaml
           ! grep -q envFrom /tmp/tenant-only.yaml
+          helm template x charts/retyc-csi --set credentials.existingSecret=s --set controller.replicas=3 > /tmp/ha.yaml
+          helm template x charts/retyc-csi --set credentials.existingSecret=s \
+            --set cache.store=redis --set cache.redis.subchart.enabled=true > /tmp/redis-subchart.yaml
+          helm template x charts/retyc-csi --set credentials.existingSecret=s \
+            --set cache.store=redis --set cache.redis.external.url=redis://default:p@redis:6379 > /tmp/redis-external.yaml
+          # The Redis password never lands in the mount pods' ConfigMap.
+          ! helm template x charts/retyc-csi --set credentials.existingSecret=s --set cache.store=redis \
+            --set cache.redis.external.url=redis://default:p@redis:6379 \
+            --show-only templates/mount-config.yaml | grep -q 'redis://'
 
       # Validate the rendered manifests against the Kubernetes API schemas, for the oldest and
       # the newest version the chart claims to support (Chart.yaml kubeVersion).
       - name: kubeconform
         run: |
           for v in 1.34.0 1.36.0; do
-            docker run --rm -i ghcr.io/yannh/kubeconform:v0.8.0 \
-              -strict -summary -kubernetes-version "$v" < /tmp/managed.yaml
+            for f in /tmp/managed.yaml /tmp/ha.yaml /tmp/redis-subchart.yaml; do
+              docker run --rm -i ghcr.io/yannh/kubeconform:v0.8.0 \
+                -strict -summary -kubernetes-version "$v" < "$f"
+            done
           done
 
       - name: Package
