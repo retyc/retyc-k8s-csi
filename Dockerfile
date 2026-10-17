@@ -25,8 +25,8 @@ ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath \
-    -ldflags "-s -w -X github.com/retyc/retyc-k8s-csi/internal/driver.DriverVersion=${VERSION}" \
-    -o /retyc-k8s-csi .
+    -ldflags "-s -w -X github.com/retyc/retycfs-k8s-csi/internal/driver.DriverVersion=${VERSION}" \
+    -o /retycfs-k8s-csi .
 
 # Reuse the officially published retyc-cli image instead of vendoring/rebuilding the binary —
 # dataroom management is security-sensitive (AGE crypto) and should always run
@@ -43,7 +43,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=retyc /retyc /usr/local/bin/retyc
-COPY --from=builder /retyc-k8s-csi /usr/local/bin/retyc-k8s-csi
+COPY --from=builder /retycfs-k8s-csi /usr/local/bin/retycfs-k8s-csi
 
 # Last on purpose: REVISION and CREATED change on every build, and an ARG is part of the cache key
 # of every RUN that follows it — declared at the top of the stage, they re-ran the apt-get above
@@ -53,17 +53,17 @@ ARG VERSION
 ARG REVISION
 ARG CREATED
 
-LABEL org.opencontainers.image.title="Retyc CSI Driver" \
+LABEL org.opencontainers.image.title="RetycFS CSI Driver" \
       org.opencontainers.image.description="Kubernetes CSI driver for Retyc datarooms: ReadWriteMany volumes with end-to-end post-quantum encryption" \
       org.opencontainers.image.vendor="Retyc / TripleStack SAS" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.url="https://retyc.com" \
-      org.opencontainers.image.source="https://github.com/retyc/retyc-k8s-csi" \
-      org.opencontainers.image.documentation="https://github.com/retyc/retyc-k8s-csi/blob/master/README.md" \
+      org.opencontainers.image.source="https://github.com/retyc/retycfs-k8s-csi" \
+      org.opencontainers.image.documentation="https://github.com/retyc/retycfs-k8s-csi/blob/master/README.md" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${REVISION}" \
       org.opencontainers.image.created="${CREATED}" \
       org.opencontainers.image.base.name="docker.io/library/debian:trixie-slim" \
       com.retyc.cli.version="${RETYC_CLI_VERSION}"
 
-ENTRYPOINT ["/usr/local/bin/retyc-k8s-csi"]
+ENTRYPOINT ["/usr/local/bin/retycfs-k8s-csi"]

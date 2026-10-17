@@ -14,8 +14,8 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
 
-	"github.com/retyc/retyc-k8s-csi/internal/identity"
-	"github.com/retyc/retyc-k8s-csi/internal/retycclient"
+	"github.com/retyc/retycfs-k8s-csi/internal/identity"
+	"github.com/retyc/retycfs-k8s-csi/internal/retycclient"
 )
 
 // ControllerServer implements csi.ControllerServer by execing the retyc CLI. 1 CSI volume = 1

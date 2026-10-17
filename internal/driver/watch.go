@@ -13,7 +13,7 @@ import (
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
 
-	"github.com/retyc/retyc-k8s-csi/internal/mountpod"
+	"github.com/retyc/retycfs-k8s-csi/internal/mountpod"
 )
 
 // repairWorkers is how many volumes the pod watch repairs at once: a repair may wait for a mount

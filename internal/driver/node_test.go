@@ -27,8 +27,8 @@ import (
 	"k8s.io/client-go/tools/record"
 	mountutils "k8s.io/mount-utils"
 
-	"github.com/retyc/retyc-k8s-csi/internal/identity"
-	"github.com/retyc/retyc-k8s-csi/internal/mountpod"
+	"github.com/retyc/retycfs-k8s-csi/internal/identity"
+	"github.com/retyc/retycfs-k8s-csi/internal/mountpod"
 )
 
 // fakeMounter is an in-memory mount table: FUSE mounts added by the test (as a mount pod would),
@@ -144,12 +144,12 @@ func (f *fakeMounter) State(target string) (mounted, corrupted bool, err error) 
 }
 
 const (
-	testNS     = "retyc-csi"
+	testNS     = "retycfs-csi"
 	testNode   = "node-a"
 	testVolume = "dr-1"
 	// Under the kubelet directory of each test: kubelet's layout since 1.25 (driver, then the
 	// SHA-256 of the volume handle).
-	testStagingRel = "plugins/kubernetes.io/csi/csi.retyc.com/abc/globalmount"
+	testStagingRel = "plugins/kubernetes.io/csi/csi.retycfs.com/abc/globalmount"
 	testTargetRel  = "pods/p1/volumes/kubernetes.io~csi/pv-1/mount"
 )
 
@@ -311,7 +311,7 @@ func (e *nodeEnv) setVolData(staging string, present bool) {
 	if err := os.MkdirAll(path.Dir(staging), 0o750); err != nil {
 		e.t.Fatal(err)
 	}
-	if err := os.WriteFile(volData(staging), []byte(`{"driverName":"csi.retyc.com"}`), 0o600); err != nil {
+	if err := os.WriteFile(volData(staging), []byte(`{"driverName":"csi.retycfs.com"}`), 0o600); err != nil {
 		e.t.Fatal(err)
 	}
 }

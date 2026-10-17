@@ -12,10 +12,10 @@ by the node plugin, not by Helm) on the CLI's metrics port.
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:
-  name: {{ include "retyc-csi.fullname" . }}
+  name: {{ include "retycfs-csi.fullname" . }}
   namespace: {{ $pm.namespace | default .Release.Namespace }}
   labels:
-    {{- include "retyc-csi.labels" . | nindent 4 }}
+    {{- include "retycfs-csi.labels" . | nindent 4 }}
     {{- with $pm.labels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
@@ -25,19 +25,19 @@ spec:
       - {{ .Release.Namespace }}
   selector:
     matchLabels:
-      {{- include "retyc-csi.selectorLabels" . | nindent 6 }}
+      {{- include "retycfs-csi.selectorLabels" . | nindent 6 }}
   podMetricsEndpoints:
     - {{ merge (dict "port" "health" "path" "/metrics") $endpoint | toYaml | indent 6 | trim }}
 ---
 # The mount pods: retycfs_*, the Go runtime and the process, one target
-# per volume and node (labels csi.retyc.com/volume, /node, /pvc, /namespace on the pod).
+# per volume and node (labels csi.retycfs.com/volume, /node, /pvc, /namespace on the pod).
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:
-  name: {{ include "retyc-csi.fullname" . }}-mount
+  name: {{ include "retycfs-csi.fullname" . }}-mount
   namespace: {{ $pm.namespace | default .Release.Namespace }}
   labels:
-    {{- include "retyc-csi.labels" . | nindent 4 }}
+    {{- include "retycfs-csi.labels" . | nindent 4 }}
     {{- with $pm.labels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
@@ -47,8 +47,8 @@ spec:
       - {{ .Release.Namespace }}
   selector:
     matchLabels:
-      app.kubernetes.io/name: retyc-mount
-      app.kubernetes.io/managed-by: retyc-k8s-csi
+      app.kubernetes.io/name: retycfs-mount
+      app.kubernetes.io/managed-by: retycfs-k8s-csi
   podMetricsEndpoints:
     - {{ merge (dict "port" "metrics" "path" "/metrics") $endpoint | toYaml | indent 6 | trim }}
 {{- end }}

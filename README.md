@@ -1,15 +1,15 @@
 <p align="center"><img width="200" src=".media/Retyc_Logo_Blue.png" alt="Retyc logo" /></p>
 
 <p align="center">
-  <a href="https://github.com/retyc/retyc-k8s-csi/actions/workflows/main.yml"><img src="https://github.com/retyc/retyc-k8s-csi/actions/workflows/main.yml/badge.svg" alt="CI" /></a>
+  <a href="https://github.com/retyc/retycfs-k8s-csi/actions/workflows/main.yml"><img src="https://github.com/retyc/retycfs-k8s-csi/actions/workflows/main.yml/badge.svg" alt="CI" /></a>
   <a href="https://kubernetes-csi.github.io/docs/"><img src="https://img.shields.io/badge/CSI-1.11-326ce5.svg" alt="CSI 1.11" /></a>
   <a href="go.mod"><img src="https://img.shields.io/badge/go-1.26-00ADD8.svg" alt="Go 1.26" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT" /></a>
 </p>
 
-# Retyc CSI Driver
+# RetycFS CSI Driver
 
-**Retyc CSI driver** is a CSI driver that uses your [Retyc](https://retyc.com) account to support dynamic
+**RetycFS CSI driver** is a CSI driver that uses your [Retyc](https://retyc.com) account to support dynamic
 provisioning of `ReadWriteMany` Kubernetes Persistent Volumes via Persistent Volume Claims. Each Persistent Volume is
 a Retyc dataroom, mounted on the nodes with **RetycFS**, the filesystem of the
 [`retyc` CLI](https://github.com/retyc/retyc-cli), and encrypted end to end on the node before anything reaches the
@@ -27,17 +27,17 @@ can be expanded, and their versioning switched through a VolumeAttributesClass.
 - a Retyc account and two credentials: a token, printed once by `retyc auth login --offline`, and the passphrase of
   your Retyc key, the one the CLI asks you for.
 
-## How to deploy Retyc CSI driver to your cluster
+## How to deploy RetycFS CSI driver to your cluster
 
 ### With Helm
 
-Follow the instructions from the helm chart [README](charts/retyc-csi/README.md).
+Follow the instructions from the helm chart [README](charts/retycfs-csi/README.md).
 
 The tl;dr is
 
 ```console
-$ helm repo add retyc https://retyc.github.io/retyc-k8s-csi/
-$ helm install retyc-csi retyc/retyc-csi --namespace kube-system \
+$ helm repo add retyc https://retyc.github.io/retycfs-k8s-csi/
+$ helm install retycfs-csi retyc/retycfs-csi --namespace kube-system \
     --set credentials.token=<token> \
     --set credentials.keyPassphrase=<key passphrase>
 ```
@@ -45,7 +45,7 @@ $ helm install retyc-csi retyc/retyc-csi --namespace kube-system \
 The controller pod must be `3/3 Running`, the node pods `2/2` (see [doc/troubleshooting.md](doc/troubleshooting.md)):
 
 ```console
-$ kubectl -n kube-system get pods -l app.kubernetes.io/instance=retyc-csi
+$ kubectl -n kube-system get pods -l app.kubernetes.io/instance=retycfs-csi
 ```
 
 ### Test your environment
@@ -53,28 +53,28 @@ $ kubectl -n kube-system get pods -l app.kubernetes.io/instance=retyc-csi
 Deploy the test resources, a claim with a writer pod and a reader pod:
 
 ```console
-$ kubectl create -f https://raw.githubusercontent.com/retyc/retyc-k8s-csi/master/examples/rwx-test.yaml
-$ kubectl logs -f retyc-reader
+$ kubectl create -f https://raw.githubusercontent.com/retyc/retycfs-k8s-csi/master/examples/rwx-test.yaml
+$ kubectl logs -f retycfs-reader
 ```
 
 The reader prints the lines the writer appends. Check `retyc dataroom ls`, or the Retyc web app: the dataroom is
 there, named after the volume. The volume's mount pod runs next to the driver:
 
 ```console
-$ kubectl -n kube-system get pods -l app.kubernetes.io/name=retyc-mount
+$ kubectl -n kube-system get pods -l app.kubernetes.io/name=retycfs-mount
 ```
 
 Delete the test resources:
 
 ```console
-$ kubectl delete -f https://raw.githubusercontent.com/retyc/retyc-k8s-csi/master/examples/rwx-test.yaml
+$ kubectl delete -f https://raw.githubusercontent.com/retyc/retycfs-k8s-csi/master/examples/rwx-test.yaml
 ```
 
 The dataroom is gone as well.
 
 ### Deploying your own PersistentVolumeClaims
 
-Every claim needs the `csi.retyc.com/uid` annotation: every file of the volume belongs to that UID, and **only pods
+Every claim needs the `csi.retycfs.com/uid` annotation: every file of the volume belongs to that UID, and **only pods
 running as that UID can write** (others read). Use `accessModes: [ReadWriteMany]` and one of the storage classes:
 
 ```yaml
@@ -83,18 +83,18 @@ kind: PersistentVolumeClaim
 metadata:
   name: shared-docs
   annotations:
-    csi.retyc.com/uid: "1000"
+    csi.retycfs.com/uid: "1000"
 spec:
   accessModes: [ReadWriteMany]
-  storageClassName: retyc-rwx
+  storageClassName: retycfs-rwx
   resources:
     requests:
       storage: 20Gi
 ```
 
-- `retyc-rwx`: deleting the claim deletes the dataroom;
-- `retyc-rwx-retain`: deleting the claim keeps the dataroom;
-- `retyc-rwx-tenant`: same, with the credentials of a `retyc-credentials` Secret in the claim's namespace instead of
+- `retycfs-rwx`: deleting the claim deletes the dataroom;
+- `retycfs-rwx-retain`: deleting the claim keeps the dataroom;
+- `retycfs-rwx-tenant`: same, with the credentials of a `retycfs-credentials` Secret in the claim's namespace instead of
   the cluster-wide ones (see [doc/configuration.md](doc/configuration.md#per-tenant-identities)).
 
 The size requested is reserved on your plan, 20 GiB at least. Run the pods with `securityContext.runAsUser` set to the
@@ -110,7 +110,7 @@ databases.
 
 ## Documentation
 
-- [charts/retyc-csi/README.md](charts/retyc-csi/README.md): chart values
+- [charts/retycfs-csi/README.md](charts/retycfs-csi/README.md): chart values
 - [doc/configuration.md](doc/configuration.md): PVC annotations, static PVs, versioning, per-namespace credentials,
   Redis cache, metrics
 - [doc/troubleshooting.md](doc/troubleshooting.md): mount pod logs, exit codes, events

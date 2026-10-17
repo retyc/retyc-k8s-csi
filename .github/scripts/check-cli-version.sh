@@ -6,7 +6,7 @@
 set -eu
 cd "$(dirname "$0")/../.."
 
-chart=${1:-charts/retyc-csi}
+chart=${1:-charts/retycfs-csi}
 dockerfile=${2:-Dockerfile}
 
 version=$(sed -n 's/^ARG RETYC_CLI_VERSION=//p' "$dockerfile" | head -n1 | tr -d '"')

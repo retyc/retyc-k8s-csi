@@ -22,10 +22,10 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "retyc-csi.fullname" . }}-mount-config
+  name: {{ include "retycfs-csi.fullname" . }}-mount-config
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "retyc-csi.labels" . | nindent 4 }}
+    {{- include "retycfs-csi.labels" . | nindent 4 }}
     app.kubernetes.io/component: node
 data:
   mount.json: |

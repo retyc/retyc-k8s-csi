@@ -1,5 +1,5 @@
 {{- /*
-Checks the csi.retyc.com/* annotations of the claims on this release's StorageClasses, with the
+Checks the csi.retycfs.com/* annotations of the claims on this release's StorageClasses, with the
 formats the driver accepts (internal/driver/annotations.go), so that a mistake fails `kubectl apply`
 instead of CreateVolume or the stage. Only what changes is checked on an update: a claim admitted
 before the policy (or a controller updating it) is never blocked by an annotation it already had.
@@ -7,15 +7,15 @@ before the policy (or a controller updating it) is never blocked by an annotatio
 Not covered (documented in values.yaml): a claim that receives one of these classes later as the
 cluster default (retroactive assignment), and the claim of a static PV on another class.
 */ -}}
-{{- $classes := include "retyc-csi.storageClassNames" . | fromJsonArray }}
+{{- $classes := include "retycfs-csi.storageClassNames" . | fromJsonArray }}
 {{- if and .Values.admissionPolicy.enabled $classes }}
-{{- $name := printf "%s-pvc-annotations" (include "retyc-csi.fullname" .) }}
+{{- $name := printf "%s-pvc-annotations" (include "retycfs-csi.fullname" .) }}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
   name: {{ $name }}
   labels:
-    {{- include "retyc-csi.labels" . | nindent 4 }}
+    {{- include "retycfs-csi.labels" . | nindent 4 }}
 spec:
   failurePolicy: {{ .Values.admissionPolicy.failurePolicy | default "Fail" }}
   matchConstraints:
@@ -27,7 +27,7 @@ spec:
         resources: ["persistentvolumeclaims"]
   matchConditions:
     # Mutating admission (DefaultStorageClass) has already filled in a default class at creation.
-    - name: retyc-storage-class
+    - name: retycfs-storage-class
       expression: >-
         has(object.spec.storageClassName) && object.spec.storageClassName in {{ $classes | toJson }}
   variables:
@@ -35,24 +35,24 @@ spec:
       expression: "has(object.metadata.annotations) ? object.metadata.annotations : {}"
     - name: old
       expression: "request.operation == 'UPDATE' && has(oldObject.metadata.annotations) ? oldObject.metadata.annotations : {}"
-    # The csi.retyc.com/* annotations added or modified by this request.
+    # The csi.retycfs.com/* annotations added or modified by this request.
     - name: changed
       expression: >-
-        variables.ann.filter(k, k.startsWith('csi.retyc.com/')
+        variables.ann.filter(k, k.startsWith('csi.retycfs.com/')
         && (!(k in variables.old) || variables.old[k] != variables.ann[k]))
   validations:
-    - expression: "request.operation != 'CREATE' || 'csi.retyc.com/uid' in variables.ann"
+    - expression: "request.operation != 'CREATE' || 'csi.retycfs.com/uid' in variables.ann"
       message: >-
-        annotation csi.retyc.com/uid is required on a Retyc claim: the UID that owns every file of
+        annotation csi.retycfs.com/uid is required on a Retyc claim: the UID that owns every file of
         the volume, the one its pods must run as to write (an integer, "0" for root)
       reason: Invalid
-    - expression: "!('csi.retyc.com/uid' in variables.old) || 'csi.retyc.com/uid' in variables.ann"
+    - expression: "!('csi.retycfs.com/uid' in variables.old) || 'csi.retycfs.com/uid' in variables.ann"
       message: >-
-        annotation csi.retyc.com/uid cannot be removed from a Retyc claim (change its value instead:
+        annotation csi.retycfs.com/uid cannot be removed from a Retyc claim (change its value instead:
         it applies at the next mount of the volume on each node)
       reason: Invalid
     {{- range list "uid" "gid" }}
-    {{- $k := printf "csi.retyc.com/%s" . }}
+    {{- $k := printf "csi.retycfs.com/%s" . }}
     - expression: >-
         !('{{ $k }}' in variables.changed)
         || (variables.ann['{{ $k }}'].matches('^0*[0-9]{1,10}$') && int(variables.ann['{{ $k }}']) <= 4294967295)
@@ -63,16 +63,16 @@ spec:
     {{- end }}
     # time.ParseDuration's syntax (the regex keeps duration() from failing), and not negative.
     - expression: >-
-        !('csi.retyc.com/cache-ttl' in variables.changed)
-        || (variables.ann['csi.retyc.com/cache-ttl'].matches(r'^[-+]?(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$')
-            && duration(variables.ann['csi.retyc.com/cache-ttl']) >= duration('0s'))
+        !('csi.retycfs.com/cache-ttl' in variables.changed)
+        || (variables.ann['csi.retycfs.com/cache-ttl'].matches(r'^[-+]?(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$')
+            && duration(variables.ann['csi.retycfs.com/cache-ttl']) >= duration('0s'))
       messageExpression: >-
-        'annotation csi.retyc.com/cache-ttl = "' + variables.ann['csi.retyc.com/cache-ttl'] + '": want a positive Go duration (30s, 5m, 1h30m)'
-      message: "annotation csi.retyc.com/cache-ttl: want a positive Go duration (30s, 5m, 1h30m)"
+        'annotation csi.retycfs.com/cache-ttl = "' + variables.ann['csi.retycfs.com/cache-ttl'] + '": want a positive Go duration (30s, 5m, 1h30m)'
+      message: "annotation csi.retycfs.com/cache-ttl: want a positive Go duration (30s, 5m, 1h30m)"
       reason: Invalid
     # strconv.ParseBool's values.
     {{- range list "background-delete" "unsafe-write" "read-only" }}
-    {{- $k := printf "csi.retyc.com/%s" . }}
+    {{- $k := printf "csi.retycfs.com/%s" . }}
     - expression: >-
         !('{{ $k }}' in variables.changed)
         || variables.ann['{{ $k }}'] in ['true', 'false', 'True', 'False', 'TRUE', 'FALSE', 't', 'f', 'T', 'F', '1', '0']
@@ -83,16 +83,16 @@ spec:
     {{- end }}
     # Patterns separated by spaces, or "none" alone (keep no file local).
     - expression: >-
-        !('csi.retyc.com/local-file' in variables.changed)
-        || !variables.ann['csi.retyc.com/local-file'].matches(r'(^|\s)none(\s|$)')
-        || variables.ann['csi.retyc.com/local-file'].matches(r'^\s*none\s*$')
+        !('csi.retycfs.com/local-file' in variables.changed)
+        || !variables.ann['csi.retycfs.com/local-file'].matches(r'(^|\s)none(\s|$)')
+        || variables.ann['csi.retycfs.com/local-file'].matches(r'^\s*none\s*$')
       messageExpression: >-
-        'annotation csi.retyc.com/local-file = "' + variables.ann['csi.retyc.com/local-file'] + '": "none" cannot be combined with patterns'
-      message: 'annotation csi.retyc.com/local-file: "none" cannot be combined with patterns'
+        'annotation csi.retycfs.com/local-file = "' + variables.ann['csi.retycfs.com/local-file'] + '": "none" cannot be combined with patterns'
+      message: 'annotation csi.retycfs.com/local-file: "none" cannot be combined with patterns'
       reason: Invalid
     # resource.ParseQuantity, and strictly positive.
     {{- range list "mount-cpu-request" "mount-cpu-limit" "mount-memory-request" "mount-memory-limit" }}
-    {{- $k := printf "csi.retyc.com/%s" . }}
+    {{- $k := printf "csi.retycfs.com/%s" . }}
     - expression: >-
         !('{{ $k }}' in variables.changed)
         || (isQuantity(variables.ann['{{ $k }}']) && quantity(variables.ann['{{ $k }}']).isGreaterThan(quantity('0')))
@@ -107,7 +107,7 @@ kind: ValidatingAdmissionPolicyBinding
 metadata:
   name: {{ $name }}
   labels:
-    {{- include "retyc-csi.labels" . | nindent 4 }}
+    {{- include "retycfs-csi.labels" . | nindent 4 }}
 spec:
   policyName: {{ $name }}
   validationActions: [Deny]

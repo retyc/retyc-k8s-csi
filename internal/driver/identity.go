@@ -12,12 +12,12 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 	"k8s.io/klog/v2"
 
-	"github.com/retyc/retyc-k8s-csi/internal/health"
+	"github.com/retyc/retycfs-k8s-csi/internal/health"
 )
 
 // DriverName is advertised to kubelet/external-provisioner and referenced by the StorageClass's
 // `provisioner:` field.
-const DriverName = "csi.retyc.com"
+const DriverName = "csi.retycfs.com"
 
 // DriverVersion is bumped on every behavior-affecting release; kubelet logs it on registration.
 var DriverVersion = "dev" //nolint:gochecknoglobals // set at build time via -ldflags -X (see Makefile, Dockerfile)

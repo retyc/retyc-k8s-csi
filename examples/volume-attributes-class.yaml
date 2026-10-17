@@ -5,31 +5,31 @@
 apiVersion: storage.k8s.io/v1
 kind: VolumeAttributesClass
 metadata:
-  name: retyc-versioned
-driverName: csi.retyc.com
+  name: retycfs-versioned
+driverName: csi.retycfs.com
 parameters:
   versioning: "true"
 ---
 apiVersion: storage.k8s.io/v1
 kind: VolumeAttributesClass
 metadata:
-  name: retyc-unversioned
-driverName: csi.retyc.com
+  name: retycfs-unversioned
+driverName: csi.retycfs.com
 parameters:
   versioning: "false"
 ---
-# Created with versioning. `kubectl patch pvc retyc-versioned-data -p
-# '{"spec":{"volumeAttributesClassName":"retyc-unversioned"}}'` turns it off.
+# Created with versioning. `kubectl patch pvc retycfs-versioned-data -p
+# '{"spec":{"volumeAttributesClassName":"retycfs-unversioned"}}'` turns it off.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: retyc-versioned-data
+  name: retycfs-versioned-data
   annotations:
-    csi.retyc.com/uid: "1000"
+    csi.retycfs.com/uid: "1000"
 spec:
   accessModes: [ReadWriteMany]
-  storageClassName: retyc-rwx
-  volumeAttributesClassName: retyc-versioned
+  storageClassName: retycfs-rwx
+  volumeAttributesClassName: retycfs-versioned
   resources:
     requests:
       storage: 20Gi

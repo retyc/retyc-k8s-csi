@@ -20,7 +20,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 	mountutils "k8s.io/mount-utils"
 
-	"github.com/retyc/retyc-k8s-csi/internal/mountpod"
+	"github.com/retyc/retycfs-k8s-csi/internal/mountpod"
 )
 
 func TestRecoverRecreatesDeadMountPod(t *testing.T) {
@@ -66,10 +66,10 @@ func TestRecoverRecreatesDeadMountPod(t *testing.T) {
 		t.Fatalf("target on %s, want %s", device(top), newDev)
 	}
 	if v := testutil.ToFloat64(e.s.Metrics.pods.WithLabelValues(stateReady)); v != 1 {
-		t.Fatalf("retyc_csi_mount_pods{state=ready} = %v", v)
+		t.Fatalf("retycfs_csi_mount_pods{state=ready} = %v", v)
 	}
 	if v := testutil.ToFloat64(e.s.Metrics.outdated.WithLabelValues("cli_version")); v != 0 {
-		t.Fatalf("retyc_csi_mount_pod_outdated = %v", v)
+		t.Fatalf("retycfs_csi_mount_pod_outdated = %v", v)
 	}
 	// Nothing else to do.
 	before, _ := e.mnt.list()
@@ -361,7 +361,7 @@ func TestPublishRepairsStaging(t *testing.T) {
 }
 
 func TestDeadTargets(t *testing.T) {
-	const staging = "/var/lib/kubelet/plugins/kubernetes.io/csi/csi.retyc.com/abc/globalmount"
+	const staging = "/var/lib/kubelet/plugins/kubernetes.io/csi/csi.retycfs.com/abc/globalmount"
 	src := mountSource("dr-1")
 	podA := "/var/lib/kubelet/pods/a/volumes/kubernetes.io~csi/pvc-1/mount"
 	podB := "/var/lib/kubelet/pods/b/volumes/kubernetes.io~csi/pvc-1/mount"

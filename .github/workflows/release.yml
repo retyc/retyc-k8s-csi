@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@v7
 
       # The driver's release: image tags and generated notes. The chart is released separately,
-      # by the Chart workflow, when charts/retyc-csi/Chart.yaml is bumped to reference this tag.
+      # by the Chart workflow, when charts/retycfs-csi/Chart.yaml is bumped to reference this tag.
       # A release created from the GitHub UI creates the tag (and this run) itself: nothing to
       # do then, the run only has to publish the image.
       - name: GitHub release

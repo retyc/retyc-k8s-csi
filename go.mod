@@ -1,4 +1,4 @@
-module github.com/retyc/retyc-k8s-csi
+module github.com/retyc/retycfs-k8s-csi
 
 go 1.26.9
 

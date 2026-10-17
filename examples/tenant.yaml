@@ -1,5 +1,5 @@
 # A namespace bringing its own Retyc account. Copy, fill in the Secret, apply: the claim is
-# provisioned in *that* account, and mounted with it, through the retyc-rwx-tenant class. The
+# provisioned in *that* account, and mounted with it, through the retycfs-rwx-tenant class. The
 # Secret's name is fixed by the StorageClass parameters (the chart's storageClasses value).
 apiVersion: v1
 kind: Namespace
@@ -9,7 +9,7 @@ metadata:
 apiVersion: v1
 kind: Secret
 metadata:
-  name: retyc-credentials
+  name: retycfs-credentials
   namespace: team-a
 type: Opaque
 stringData:
@@ -22,10 +22,10 @@ metadata:
   name: team-data
   namespace: team-a
   annotations:
-    csi.retyc.com/uid: "1000"   # owner of the files: the UID the pods below run as
+    csi.retycfs.com/uid: "1000"   # owner of the files: the UID the pods below run as
 spec:
   accessModes: [ReadWriteMany]
-  storageClassName: retyc-rwx-tenant
+  storageClassName: retycfs-rwx-tenant
   resources:
     requests:
       storage: 1Gi

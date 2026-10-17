@@ -1,13 +1,13 @@
-# Re-adopt an existing dataroom (e.g. one left behind by a retyc-rwx-retain PVC, or created by
+# Re-adopt an existing dataroom (e.g. one left behind by a retycfs-rwx-retain PVC, or created by
 # hand) as a static PV. The CSI volume handle is the dataroom ID, from `retyc --json dataroom ls`.
 #
 # The mount settings are read at stage from volumeAttributes, with the same keys as the PVC
-# annotations (csi.retyc.com/uid is mandatory: every file of the mount belongs to it, and only a pod
+# annotations (csi.retycfs.com/uid is mandatory: every file of the mount belongs to it, and only a pod
 # running with that UID can write). Add pvcName and pvcNamespace to have the claim's annotations
 # read too: they win over volumeAttributes. The chart's ValidatingAdmissionPolicy requires
-# csi.retyc.com/uid on every claim of its StorageClasses, so the claim below carries it as well.
+# csi.retycfs.com/uid on every claim of its StorageClasses, so the claim below carries it as well.
 #
-# On a tenant StorageClass (one with node-stage secrets, such as retyc-rwx-tenant), the PV must
+# On a tenant StorageClass (one with node-stage secrets, such as retycfs-rwx-tenant), the PV must
 # name the tenant's Secret itself (nodeStageSecretRef below): kubelet reads it from the PV, not
 # from the class. Without it the node plugin refuses the stage (FailedPrecondition) rather than
 # mount the dataroom with the driver's cluster-wide identity.
@@ -18,34 +18,34 @@
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: retyc-adopted
+  name: retycfs-adopted
 spec:
   accessModes: [ReadWriteMany]
   capacity:
     storage: 1Gi
   persistentVolumeReclaimPolicy: Retain
-  storageClassName: retyc-rwx-retain
+  storageClassName: retycfs-rwx-retain
   csi:
-    driver: csi.retyc.com
+    driver: csi.retycfs.com
     volumeHandle: REPLACE-WITH-DATAROOM-ID        # e.g. 01a06bd5-45b6-7489-bc18-04990d98b0c2
     volumeAttributes:
-      csi.retyc.com/uid: "1000"                   # owner of the files: the UID the consumer pods run as
-      # csi.retyc.com/gid: "1000"                 # optional, defaults to the UID
+      csi.retycfs.com/uid: "1000"                   # owner of the files: the UID the consumer pods run as
+      # csi.retycfs.com/gid: "1000"                 # optional, defaults to the UID
     # Tenant class only: the tenant's credentials, in the claim's namespace.
     # nodeStageSecretRef:
-    #   name: retyc-credentials
+    #   name: retycfs-credentials
     #   namespace: REPLACE-WITH-CLAIM-NAMESPACE
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: retyc-adopted
+  name: retycfs-adopted
   annotations:
-    csi.retyc.com/uid: "1000"
+    csi.retycfs.com/uid: "1000"
 spec:
   accessModes: [ReadWriteMany]
-  storageClassName: retyc-rwx-retain
-  volumeName: retyc-adopted      # pin to the PV above instead of provisioning a new dataroom
+  storageClassName: retycfs-rwx-retain
+  volumeName: retycfs-adopted      # pin to the PV above instead of provisioning a new dataroom
   resources:
     requests:
       storage: 1Gi

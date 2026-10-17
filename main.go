@@ -1,5 +1,5 @@
-// Command retyc-k8s-csi is the entrypoint for both the CSI Controller plugin (--mode=controller)
-// and the CSI Node plugin (--mode=node) of the Retyc CSI driver. See doc/architecture.md.
+// Command retycfs-k8s-csi is the entrypoint for both the CSI Controller plugin (--mode=controller)
+// and the CSI Node plugin (--mode=node) of the RetycFS CSI driver. See doc/architecture.md.
 package main
 
 import (
@@ -27,12 +27,12 @@ import (
 	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
 
-	"github.com/retyc/retyc-k8s-csi/internal/driver"
-	"github.com/retyc/retyc-k8s-csi/internal/health"
-	"github.com/retyc/retyc-k8s-csi/internal/identity"
-	"github.com/retyc/retyc-k8s-csi/internal/mount"
-	"github.com/retyc/retyc-k8s-csi/internal/mountpod"
-	"github.com/retyc/retyc-k8s-csi/internal/retycclient"
+	"github.com/retyc/retycfs-k8s-csi/internal/driver"
+	"github.com/retyc/retycfs-k8s-csi/internal/health"
+	"github.com/retyc/retycfs-k8s-csi/internal/identity"
+	"github.com/retyc/retycfs-k8s-csi/internal/mount"
+	"github.com/retyc/retycfs-k8s-csi/internal/mountpod"
+	"github.com/retyc/retycfs-k8s-csi/internal/retycclient"
 )
 
 func main() {
@@ -42,7 +42,7 @@ func main() {
 		retycBin = flag.String("retyc-bin", "retyc", "path to the retyc CLI binary")
 		nodeID   = flag.String("node-id", "",
 			"Kubernetes name of the node, reported by NodeGetInfo (node mode only, default: $NODE_ID, $NODE_NAME)")
-		mountConfig = flag.String("mount-config", "/etc/retyc-csi/mount.json",
+		mountConfig = flag.String("mount-config", "/etc/retycfs-csi/mount.json",
 			"JSON configuration of the mount pods: image, resources, drain timeout... (node mode only)")
 		namespace = flag.String("namespace", "",
 			"namespace of the mount pods, the driver's (node mode only, default: $POD_NAMESPACE)")
@@ -85,7 +85,7 @@ func run(o options) error {
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
-			Name:        "retyc_csi_build_info",
+			Name:        "retycfs_csi_build_info",
 			Help:        "Constant 1, labeled with the driver version and the plugin mode.",
 			ConstLabels: prometheus.Labels{"version": driver.DriverVersion, "mode": o.mode},
 		}, func() float64 { return 1 }),

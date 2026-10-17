@@ -12,11 +12,11 @@ type NodeMetrics struct {
 func NewNodeMetrics() *NodeMetrics {
 	return &NodeMetrics{
 		pods: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "retyc_csi_mount_pods",
+			Name: "retycfs_csi_mount_pods",
 			Help: "Mount pods of this node by state: pending, running (not ready), ready, terminating, exited.",
 		}, []string{"state"}),
 		outdated: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "retyc_csi_mount_pod_outdated",
+			Name: "retycfs_csi_mount_pod_outdated",
 			Help: "Mount pods of this node that run another retyc-cli version than the configured one; " +
 				"they take it at the next remount of their volume.",
 		}, []string{"reason"}),

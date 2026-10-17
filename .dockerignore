@@ -9,7 +9,7 @@ charts
 doc
 examples
 dist
-retyc-k8s-csi
+retycfs-k8s-csi
 Vagrantfile
 Makefile
 *.md

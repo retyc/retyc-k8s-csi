@@ -3,7 +3,7 @@ image:
   imagePullPolicy: "always"
 
 credentials:
-  existingSecret: 'retyc-csi-credentials'
+  existingSecret: 'retycfs-csi-credentials'
 
 # The dev API (https://api.triplesfer.traefik.me) resolves to 127.0.0.1: the pods reach it through
 # the host (192.168.121.1), and accept its certificate with RETYC_INSECURE (a dev build only).
@@ -18,7 +18,7 @@ controller:
     - name: OTEL_EXPORTER_OTLP_ENDPOINT
       value: 'http://jaeger.jaeger.svc.cluster.local:4318'
     - name: OTEL_SERVICE_NAME
-      value: 'retyc-csi-controller'
+      value: 'retycfs-csi-controller'
   hostAliases:
     - ip: '192.168.121.1'
       hostnames: ['api.triplesfer.traefik.me', 'auth.triplesfer.traefik.me']
@@ -37,7 +37,7 @@ mount:
     - name: OTEL_EXPORTER_OTLP_ENDPOINT
       value: 'http://jaeger.jaeger.svc.cluster.local:4318'
     - name: OTEL_SERVICE_NAME
-      value: 'retyc-mount'
+      value: 'retycfs-mount'
   hostAliases:
     - ip: '192.168.121.1'
       hostnames: ['api.triplesfer.traefik.me', 'auth.triplesfer.traefik.me']

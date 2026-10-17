@@ -3,14 +3,14 @@
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: retyc-rwx-test
+  name: retycfs-rwx-test
   annotations:
     # Every file of the volume belongs to UID 1000 (GID too, by default): only a pod running as
     # 1000 can write. Mandatory on a Retyc claim.
-    csi.retyc.com/uid: "1000"
+    csi.retycfs.com/uid: "1000"
 spec:
   accessModes: [ReadWriteMany]
-  storageClassName: retyc-rwx
+  storageClassName: retycfs-rwx
   resources:
     requests:
       storage: 1Gi
@@ -18,10 +18,10 @@ spec:
 apiVersion: v1
 kind: Pod
 metadata:
-  name: retyc-writer
+  name: retycfs-writer
 spec:
   securityContext:
-    runAsUser: 1000 # the claim's csi.retyc.com/uid: the only UID allowed to write
+    runAsUser: 1000 # the claim's csi.retycfs.com/uid: the only UID allowed to write
     runAsGroup: 1000
   containers:
     - name: writer
@@ -35,12 +35,12 @@ spec:
   volumes:
     - name: data
       persistentVolumeClaim:
-        claimName: retyc-rwx-test
+        claimName: retycfs-rwx-test
 ---
 apiVersion: v1
 kind: Pod
 metadata:
-  name: retyc-reader
+  name: retycfs-reader
 spec:
   securityContext:
     runAsUser: 2000 # another UID on purpose: it reads, but gets "Permission denied" on a write
@@ -56,4 +56,4 @@ spec:
   volumes:
     - name: data
       persistentVolumeClaim:
-        claimName: retyc-rwx-test
+        claimName: retycfs-rwx-test

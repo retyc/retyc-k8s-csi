@@ -1,6 +1,6 @@
-# retyc-csi
+# retycfs-csi
 
-Helm chart for the [Retyc CSI driver](https://github.com/retyc/retyc-k8s-csi): `ReadWriteMany` Kubernetes volumes
+Helm chart for the [RetycFS CSI driver](https://github.com/retyc/retycfs-k8s-csi): `ReadWriteMany` Kubernetes volumes
 backed by Retyc datarooms, with end-to-end post-quantum encryption.
 
 ## Install
@@ -8,8 +8,8 @@ backed by Retyc datarooms, with end-to-end post-quantum encryption.
 From the Helm repository:
 
 ```sh
-helm repo add retyc https://retyc.github.io/retyc-k8s-csi
-helm install retyc-csi retyc/retyc-csi \
+helm repo add retyc https://retyc.github.io/retycfs-k8s-csi
+helm install retycfs-csi retyc/retycfs-csi \
   --namespace kube-system \
   --set credentials.token="$RETYC_TOKEN" \
   --set credentials.keyPassphrase="$RETYC_KEY_PASSPHRASE"
@@ -18,26 +18,26 @@ helm install retyc-csi retyc/retyc-csi \
 From the OCI registry (`--version` selects a chart version; omit it for the latest):
 
 ```sh
-helm install retyc-csi oci://ghcr.io/retyc/charts/retyc-csi --version <chart version> -n kube-system ...
+helm install retycfs-csi oci://ghcr.io/retyc/charts/retycfs-csi --version <chart version> -n kube-system ...
 ```
 
 Or point the chart at a Secret you manage yourself (keys `RETYC_TOKEN` and `RETYC_KEY_PASSPHRASE`):
 
 ```sh
-helm install retyc-csi retyc/retyc-csi -n kube-system --set credentials.existingSecret=retyc-csi-credentials
+helm install retycfs-csi retyc/retycfs-csi -n kube-system --set credentials.existingSecret=retycfs-csi-credentials
 ```
 
 Without either, the driver runs with no cluster-wide identity: the StorageClasses without a `tenantSecretName` are
 not installed, and only per-namespace identities are served.
 
 The chart installs the `CSIDriver`, RBAC, the controller `Deployment`, the node `DaemonSet`, the mount pods'
-configuration, a `ValidatingAdmissionPolicy` on the claims' `csi.retyc.com/*` annotations and up to three
-StorageClasses (`retyc-rwx`, `retyc-rwx-retain`, `retyc-rwx-tenant`). Each staged volume runs in a privileged mount pod
+configuration, a `ValidatingAdmissionPolicy` on the claims' `csi.retycfs.com/*` annotations and up to three
+StorageClasses (`retycfs-rwx`, `retycfs-rwx-retain`, `retycfs-rwx-tenant`). Each staged volume runs in a privileged mount pod
 (`retyc fs mount`) in the release namespace, which must allow it (Pod Security `privileged`). Restarting the node plugin
-cuts no mount. Every claim needs the `csi.retyc.com/uid` annotation: the files belong to that UID, and only pods running
+cuts no mount. Every claim needs the `csi.retycfs.com/uid` annotation: the files belong to that UID, and only pods running
 as it can write. See [PVC annotations](../../doc/configuration.md#pvc-annotations) for the others.
 
-**StatefulSets**: put `csi.retyc.com/uid` in the `volumeClaimTemplates` (`metadata.annotations`). Without it, the
+**StatefulSets**: put `csi.retycfs.com/uid` in the `volumeClaimTemplates` (`metadata.annotations`). Without it, the
 admission policy refuses each claim the StatefulSet controller creates, and the controller retries in a loop: the
 StatefulSet's pods stay `Pending` and its events repeat the refusal.
 
@@ -45,7 +45,7 @@ StatefulSet's pods stay `Pending` and its events repeat the refusal.
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `image.repository` | `ghcr.io/retyc/retyc-k8s-csi` | Driver image (Docker Hub mirror: `retyc/retyc-k8s-csi`) |
+| `image.repository` | `ghcr.io/retyc/retycfs-k8s-csi` | Driver image (Docker Hub mirror: `retyc/retycfs-k8s-csi`) |
 | `image.tag` | `""` | Overrides the image tag; defaults to the chart's `appVersion` |
 | `image.pullPolicy` | `IfNotPresent` | |
 | `imagePullSecrets` | `[]` | Pull secrets for the driver image, both components (only for a private mirror) |
@@ -82,10 +82,10 @@ StatefulSet's pods stay `Pending` and its events repeat the refusal.
 | `mount.imagePullSecrets` | `[]` | Pull secrets of the retyc-cli image |
 | `mount.extraEnv` / `mount.hostAliases` | `[]` | Extra environment (after the driver's) and `/etc/hosts` entries of the mount pods |
 | `mount.hostPID` | `false` | Share the host PID namespace (diagnosis only) |
-| `mount.resources` | 50m, 256Mi / 512Mi | Default resources, overridden per claim by the `csi.retyc.com/mount-*` annotations |
+| `mount.resources` | 50m, 256Mi / 512Mi | Default resources, overridden per claim by the `csi.retycfs.com/mount-*` annotations |
 | `mount.drainTimeout` | `5m` | Time a stopping mount pod gets to send its pending writes |
 | `mount.priorityClassName` | `""` | Empty means `system-node-critical` |
-| `mount.spoolDir` | `/var/lib/retyc-csi/spool` | Host directory of the spools, one per volume |
+| `mount.spoolDir` | `/var/lib/retycfs-csi/spool` | Host directory of the spools, one per volume |
 | `cache.store` | `memory` | Listing cache of the mount pods: `memory` (one per pod) or `redis` (shared) |
 | `cache.highConfidentiality` | `false` | Keep only ciphertexts in Redis; set it when several tenants share the Redis |
 | `cache.redis.subchart.enabled` | `false` | Deploy the CloudPirates Redis chart (standalone, no persistence, `allkeys-lru`; values under `redis`) |
@@ -110,9 +110,9 @@ would generate a new one, while the Redis StatefulSet keeps the former one.
 
 The chart is published by the `Chart` workflow when `Chart.yaml` changes on `master`: bump `version` (the chart)
 and, when it should ship a new driver, `appVersion` to an image tag that exists (a `v*` release of this repository).
-chart-releaser then creates the `retyc-csi-<version>` GitHub release with the package, refreshes `index.yaml` on
+chart-releaser then creates the `retycfs-csi-<version>` GitHub release with the package, refreshes `index.yaml` on
 the `gh-pages` branch, and the same package is pushed to `oci://ghcr.io/retyc/charts`.
 
-Per-tenant identities: a StorageClass entry with `tenantSecretName: retyc-credentials` resolves that Secret in the
+Per-tenant identities: a StorageClass entry with `tenantSecretName: retycfs-credentials` resolves that Secret in the
 claim's namespace for provisioning and mounting, through the standard `csi.storage.k8s.io/*-secret-*` parameters.
 Use `reclaimPolicy: Retain` on such classes.

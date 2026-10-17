@@ -4,22 +4,22 @@
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: {{ include "retyc-csi.fullname" . }}-node
+  name: {{ include "retycfs-csi.fullname" . }}-node
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "retyc-csi.labels" . | nindent 4 }}
+    {{- include "retycfs-csi.labels" . | nindent 4 }}
     app.kubernetes.io/component: node
 spec:
   selector:
     matchLabels:
-      {{- include "retyc-csi.selectorLabels" . | nindent 6 }}
+      {{- include "retycfs-csi.selectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: node
   updateStrategy:
     {{- toYaml .Values.node.updateStrategy | nindent 4 }}
   template:
     metadata:
       labels:
-        {{- include "retyc-csi.selectorLabels" . | nindent 8 }}
+        {{- include "retycfs-csi.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: node
         {{- with .Values.node.podLabels }}
         {{- toYaml . | nindent 8 }}
@@ -29,14 +29,14 @@ spec:
         checksum/credentials: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
         {{- end }}
         checksum/mount-config: {{ include (print $.Template.BasePath "/mount-config.yaml") . | sha256sum }}
-        {{- if include "retyc-csi.redisURLSecret" . }}
+        {{- if include "retycfs-csi.redisURLSecret" . }}
         checksum/redis: {{ include (print $.Template.BasePath "/redis-secret.yaml") . | sha256sum }}
         {{- end }}
         {{- with .Values.node.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
-      serviceAccountName: {{ include "retyc-csi.node.serviceAccountName" . }}
+      serviceAccountName: {{ include "retycfs-csi.node.serviceAccountName" . }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -50,7 +50,7 @@ spec:
           imagePullPolicy: {{ .Values.node.registrar.image.pullPolicy }}
           args:
             - --csi-address=/csi/csi.sock
-            - --kubelet-registration-path={{ .Values.node.kubeletDir }}/plugins/{{ include "retyc-csi.driverName" . }}/csi.sock
+            - --kubelet-registration-path={{ .Values.node.kubeletDir }}/plugins/{{ include "retycfs-csi.driverName" . }}/csi.sock
           resources:
             {{- toYaml .Values.node.registrar.resources | nindent 12 }}
           volumeMounts:
@@ -58,14 +58,14 @@ spec:
               mountPath: /csi
             - name: registration-dir
               mountPath: /registration
-        - name: retyc-csi-node
-          image: {{ include "retyc-csi.image" . }}
+        - name: retycfs-csi-node
+          image: {{ include "retycfs-csi.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - --mode=node
             - --endpoint=unix:///csi/csi.sock
             - --http-endpoint=:{{ .Values.healthPort }}
-            - --mount-config=/etc/retyc-csi/mount.json
+            - --mount-config=/etc/retycfs-csi/mount.json
             - -v={{ .Values.logLevel }}
             {{- range .Values.node.extraArgs }}
             - {{ . | quote }}
@@ -95,7 +95,7 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
-            {{- with include "retyc-csi.redisURLSecret" . }}
+            {{- with include "retycfs-csi.redisURLSecret" . }}
             # Preferred over mount.json's, and copied into each mount pod's own Secret.
             - name: RETYC_CACHE_REDIS_URL
               valueFrom:
@@ -106,7 +106,7 @@ spec:
             {{- with .Values.node.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- include "retyc-csi.credentialsEnvFrom" . | nindent 10 }}
+          {{- include "retycfs-csi.credentialsEnvFrom" . | nindent 10 }}
           securityContext:
             privileged: true
             capabilities:
@@ -131,7 +131,7 @@ spec:
             - name: spool-dir
               mountPath: {{ .Values.mount.spoolDir }}
             - name: mount-config
-              mountPath: /etc/retyc-csi
+              mountPath: /etc/retycfs-csi
               readOnly: true
             {{- with .Values.node.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
@@ -139,7 +139,7 @@ spec:
       volumes:
         - name: socket-dir
           hostPath:
-            path: {{ .Values.node.kubeletDir }}/plugins/{{ include "retyc-csi.driverName" . }}
+            path: {{ .Values.node.kubeletDir }}/plugins/{{ include "retycfs-csi.driverName" . }}
             type: DirectoryOrCreate
         - name: registration-dir
           hostPath:
@@ -159,7 +159,7 @@ spec:
             type: DirectoryOrCreate
         - name: mount-config
           configMap:
-            name: {{ include "retyc-csi.fullname" . }}-mount-config
+            name: {{ include "retycfs-csi.fullname" . }}-mount-config
         {{- with .Values.node.extraVolumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

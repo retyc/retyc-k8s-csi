@@ -5,9 +5,9 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "retyc-csi.fullname" . }}-provisioner
+  name: {{ include "retycfs-csi.fullname" . }}-provisioner
   labels:
-    {{- include "retyc-csi.labels" . | nindent 4 }}
+    {{- include "retycfs-csi.labels" . | nindent 4 }}
 rules:
   - apiGroups: [""]
     resources: ["persistentvolumes"]
@@ -27,7 +27,7 @@ rules:
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get", "list", "watch"]
-  {{- if eq (include "retyc-csi.usesTenantSecrets" .) "true" }}
+  {{- if eq (include "retycfs-csi.usesTenantSecrets" .) "true" }}
   # StorageClasses with a tenantSecretName make the provisioner read the claim namespace's Secret.
   - apiGroups: [""]
     resources: ["secrets"]
@@ -37,25 +37,25 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "retyc-csi.fullname" . }}-provisioner
+  name: {{ include "retycfs-csi.fullname" . }}-provisioner
   labels:
-    {{- include "retyc-csi.labels" . | nindent 4 }}
+    {{- include "retycfs-csi.labels" . | nindent 4 }}
 subjects:
   - kind: ServiceAccount
-    name: {{ include "retyc-csi.controller.serviceAccountName" . }}
+    name: {{ include "retycfs-csi.controller.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
 roleRef:
   kind: ClusterRole
-  name: {{ include "retyc-csi.fullname" . }}-provisioner
+  name: {{ include "retycfs-csi.fullname" . }}-provisioner
   apiGroup: rbac.authorization.k8s.io
 ---
 # Standard external-resizer permissions (expansion and VolumeAttributesClass changes).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "retyc-csi.fullname" . }}-resizer
+  name: {{ include "retycfs-csi.fullname" . }}-resizer
   labels:
-    {{- include "retyc-csi.labels" . | nindent 4 }}
+    {{- include "retycfs-csi.labels" . | nindent 4 }}
 rules:
   - apiGroups: [""]
     resources: ["persistentvolumes"]
@@ -76,7 +76,7 @@ rules:
   - apiGroups: ["storage.k8s.io"]
     resources: ["volumeattributesclasses"]
     verbs: ["get", "list", "watch"]
-  {{- if eq (include "retyc-csi.usesTenantSecrets" .) "true" }}
+  {{- if eq (include "retycfs-csi.usesTenantSecrets" .) "true" }}
   # StorageClasses with a tenantSecretName make the resizer read the claim namespace's Secret.
   - apiGroups: [""]
     resources: ["secrets"]
@@ -86,28 +86,28 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "retyc-csi.fullname" . }}-resizer
+  name: {{ include "retycfs-csi.fullname" . }}-resizer
   labels:
-    {{- include "retyc-csi.labels" . | nindent 4 }}
+    {{- include "retycfs-csi.labels" . | nindent 4 }}
 subjects:
   - kind: ServiceAccount
-    name: {{ include "retyc-csi.controller.serviceAccountName" . }}
+    name: {{ include "retycfs-csi.controller.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
 roleRef:
   kind: ClusterRole
-  name: {{ include "retyc-csi.fullname" . }}-resizer
+  name: {{ include "retycfs-csi.fullname" . }}-resizer
   apiGroup: rbac.authorization.k8s.io
-{{- if eq (include "retyc-csi.leaderElection" .) "true" }}
+{{- if eq (include "retycfs-csi.leaderElection" .) "true" }}
 ---
 # Leader election of csi-provisioner and csi-resizer (more than one controller replica): their
 # leases live in the driver's namespace.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ include "retyc-csi.fullname" . }}-leader-election
+  name: {{ include "retycfs-csi.fullname" . }}-leader-election
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "retyc-csi.labels" . | nindent 4 }}
+    {{- include "retycfs-csi.labels" . | nindent 4 }}
 rules:
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
@@ -116,17 +116,17 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "retyc-csi.fullname" . }}-leader-election
+  name: {{ include "retycfs-csi.fullname" . }}-leader-election
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "retyc-csi.labels" . | nindent 4 }}
+    {{- include "retycfs-csi.labels" . | nindent 4 }}
 subjects:
   - kind: ServiceAccount
-    name: {{ include "retyc-csi.controller.serviceAccountName" . }}
+    name: {{ include "retycfs-csi.controller.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
 roleRef:
   kind: Role
-  name: {{ include "retyc-csi.fullname" . }}-leader-election
+  name: {{ include "retycfs-csi.fullname" . }}-leader-election
   apiGroup: rbac.authorization.k8s.io
 {{- end }}
 ---
@@ -137,9 +137,9 @@ roleRef:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "retyc-csi.fullname" . }}-node
+  name: {{ include "retycfs-csi.fullname" . }}-node
   labels:
-    {{- include "retyc-csi.labels" . | nindent 4 }}
+    {{- include "retycfs-csi.labels" . | nindent 4 }}
 rules:
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
@@ -157,16 +157,16 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "retyc-csi.fullname" . }}-node
+  name: {{ include "retycfs-csi.fullname" . }}-node
   labels:
-    {{- include "retyc-csi.labels" . | nindent 4 }}
+    {{- include "retycfs-csi.labels" . | nindent 4 }}
 subjects:
   - kind: ServiceAccount
-    name: {{ include "retyc-csi.node.serviceAccountName" . }}
+    name: {{ include "retycfs-csi.node.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
 roleRef:
   kind: ClusterRole
-  name: {{ include "retyc-csi.fullname" . }}-node
+  name: {{ include "retycfs-csi.fullname" . }}-node
   apiGroup: rbac.authorization.k8s.io
 ---
 # Node plugin, in the driver's namespace only: the mount pods and their Secrets (copies of the
@@ -174,10 +174,10 @@ roleRef:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ include "retyc-csi.fullname" . }}-node
+  name: {{ include "retycfs-csi.fullname" . }}-node
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "retyc-csi.labels" . | nindent 4 }}
+    {{- include "retycfs-csi.labels" . | nindent 4 }}
 rules:
   - apiGroups: [""]
     resources: ["pods"]
@@ -189,16 +189,16 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "retyc-csi.fullname" . }}-node
+  name: {{ include "retycfs-csi.fullname" . }}-node
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "retyc-csi.labels" . | nindent 4 }}
+    {{- include "retycfs-csi.labels" . | nindent 4 }}
 subjects:
   - kind: ServiceAccount
-    name: {{ include "retyc-csi.node.serviceAccountName" . }}
+    name: {{ include "retycfs-csi.node.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
 roleRef:
   kind: Role
-  name: {{ include "retyc-csi.fullname" . }}-node
+  name: {{ include "retycfs-csi.fullname" . }}-node
   apiGroup: rbac.authorization.k8s.io
 {{- end }}

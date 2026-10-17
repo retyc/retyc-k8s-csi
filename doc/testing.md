@@ -38,7 +38,7 @@ make helm-lint    # helm dependency build, helm lint, CLI version check, three r
   retyc --json dataroom rm retyc://00000000-0000-0000-0000-000000000000 -y   # exit 1, a 404 on stderr
   ```
 
-- `make helm-lint` runs `helm dependency build charts/retyc-csi` first: the Redis subchart is a dependency, even when
+- `make helm-lint` runs `helm dependency build charts/retycfs-csi` first: the Redis subchart is a dependency, even when
   disabled, and `helm template` or `helm install` of the source chart fails without it.
 - `.github/scripts/check-cli-version.sh` checks that the Dockerfile's `RETYC_CLI_VERSION` and the chart's
   `mount.image.tag` name the same retyc-cli.
@@ -74,7 +74,7 @@ make vm-ssh       # a shell inside; kubectl and helm work without sudo there
 | `make vm-load` | `docker save` the driver image into k3s' containerd |
 | `make cli-image` | builds the development retyc-cli image `CLI_IMAGE` (default `retyc-cli:retycfs-v1.5.0-beta2`) from the tag `CLI_VERSION` (default `v1.5.0-beta2`) of the checkout `CLI_SRC` (default `../retyc_cli`), without `-tags prod` (see below) |
 | `make vm-load-cli` | the same as `vm-load` for the retyc-cli image of the mount pods (`CLI_IMAGE=...`, default `retyc-cli:retycfs-v1.5.0-beta2`, as in `examples/vagrant-values.yaml`) |
-| `make vm-secret` | creates the `retyc-csi-credentials` Secret in `kube-system` from `RETYC_TOKEN` and `RETYC_KEY_PASSPHRASE` |
+| `make vm-secret` | creates the `retycfs-csi-credentials` Secret in `kube-system` from `RETYC_TOKEN` and `RETYC_KEY_PASSPHRASE` |
 | `make vm-helm` | `vagrant rsync`, then `helm upgrade --install` of the chart in `kube-system` with `examples/vagrant-values.yaml` (`VM_VALUES=...` for another file) |
 | `make vm-restart` | restarts the controller and the node plugin, needed after a `vm-load` of the same tag |
 | `make vm-ssh` / `make vm-destroy` | `vagrant ssh` / `vagrant destroy -f` (the box stays cached) |
@@ -131,14 +131,14 @@ API, with a CLI built locally without that build tag.
    ```sh
    set -a; . ./.env.dev; set +a
    make vm-secret
-   helm dependency build charts/retyc-csi    # the subchart travels with the rsync
+   helm dependency build charts/retycfs-csi    # the subchart travels with the rsync
    make vm-helm
    ```
 
 4. **Check** in the VM:
 
    ```sh
-   kubectl -n kube-system get pods -l app.kubernetes.io/name=retyc-csi    # controller 3/3, node 2/2
+   kubectl -n kube-system get pods -l app.kubernetes.io/name=retycfs-csi    # controller 3/3, node 2/2
    ```
 
 The token of `.env.dev` is short-lived. Once it has expired, the controller stays `2/3`: its readiness probe logs
@@ -175,7 +175,7 @@ spec:
         - {name: RETYC_INSECURE, value: "true"}
         - {name: RETYC_KEYRING_ENABLED, value: "false"}
       envFrom:
-        - secretRef: {name: retyc-csi-credentials}
+        - secretRef: {name: retycfs-csi-credentials}
 ```
 
 ```sh
@@ -197,24 +197,24 @@ retyc --json dataroom ls > /tmp/datarooms-before.json     # (host) keep it; comp
 In the VM, from `/vagrant`. Mount pods live in `kube-system`; `mp` below lists them:
 
 ```sh
-alias mp='kubectl -n kube-system get pods -l app.kubernetes.io/name=retyc-mount -o wide -L csi.retyc.com/pvc'
+alias mp='kubectl -n kube-system get pods -l app.kubernetes.io/name=retycfs-mount -o wide -L csi.retycfs.com/pvc'
 ```
 
 **1. A claim without `uid` is refused.**
 
 ```sh
-sed '/annotations:/,/csi.retyc.com\/uid/d' examples/rwx-test.yaml | kubectl apply -f -
+sed '/annotations:/,/csi.retycfs.com\/uid/d' examples/rwx-test.yaml | kubectl apply -f -
 ```
 
-Expected: `denied request: ValidatingAdmissionPolicy ...: annotation csi.retyc.com/uid is required`. With
+Expected: `denied request: ValidatingAdmissionPolicy ...: annotation csi.retycfs.com/uid is required`. With
 `--set admissionPolicy.enabled=false`, the claim is created but stays `Pending`, with a `ProvisioningFailed` event
-`InvalidArgument ... annotation csi.retyc.com/uid is required`, and no dataroom is created.
+`InvalidArgument ... annotation csi.retycfs.com/uid is required`, and no dataroom is created.
 
 **2. A `1Gi` claim gets 20 GiB.**
 
 ```sh
 kubectl apply -f examples/rwx-test.yaml
-kubectl get pvc retyc-rwx-test -w                 # Bound, CAPACITY 20Gi
+kubectl get pvc retycfs-rwx-test -w                 # Bound, CAPACITY 20Gi
 retyc --json dataroom ls                          # (host) the pvc-... dataroom, storage capacity 21474836480
 ```
 
@@ -222,32 +222,32 @@ retyc --json dataroom ls                          # (host) the pvc-... dataroom,
 the reader as 2000:
 
 ```sh
-kubectl logs -f retyc-reader                                    # the writer's lines every 5 s
-kubectl exec retyc-writer -- ls -ln /data                       # owner 1000:1000
-kubectl exec retyc-reader -- touch /data/x                      # Permission denied
+kubectl logs -f retycfs-reader                                    # the writer's lines every 5 s
+kubectl exec retycfs-writer -- ls -ln /data                       # owner 1000:1000
+kubectl exec retycfs-reader -- touch /data/x                      # Permission denied
 ```
 
 **4. Two pods, one mount pod.** Both pods are on the single node: one mount pod for the volume, one RetycFS mount on the
 staging path, one bind per pod.
 
 ```sh
-mp                                                              # one retyc-mount-..., 1/1 Running
+mp                                                              # one retycfs-mount-..., 1/1 Running
 findmnt -t fuse.retycfs                                         # source retyc://<id>: globalmount + 2 target paths
 ```
 
 **5. Stats.** `NodeGetVolumeStats` serves the mount's `statfs`:
 
 ```sh
-kubectl get --raw "/api/v1/nodes/$(hostname)/proxy/stats/summary" | jq '.pods[].volume[]? | select(.pvcRef.name=="retyc-rwx-test")'
+kubectl get --raw "/api/v1/nodes/$(hostname)/proxy/stats/summary" | jq '.pods[].volume[]? | select(.pvcRef.name=="retycfs-rwx-test")'
 ```
 
 **6. Expand.**
 
 ```sh
-kubectl patch pvc retyc-rwx-test -p '{"spec":{"resources":{"requests":{"storage":"30Gi"}}}}'
-kubectl get pvc retyc-rwx-test -w                 # CAPACITY 30Gi, no node step
+kubectl patch pvc retycfs-rwx-test -p '{"spec":{"resources":{"requests":{"storage":"30Gi"}}}}'
+kubectl get pvc retycfs-rwx-test -w                 # CAPACITY 30Gi, no node step
 retyc --json dataroom ls                          # (host) 32212254720
-kubectl exec retyc-writer -- df -h /data          # the new size within a minute (cached dataroom stats)
+kubectl exec retycfs-writer -- df -h /data          # the new size within a minute (cached dataroom stats)
 ```
 
 **7. `kill -9` of the mount process.** The volume comes back in about 10 to 18 s, without restarting the pods (they
@@ -257,8 +257,8 @@ nothing):
 ```sh
 sudo pkill -9 -f '^/retyc fs mount'               # every mount process of the node: fine in the VM
 mp -w                                             # the pod exits (137), a new one is Running then 1/1
-kubectl exec retyc-writer -- ls /data             # Transport endpoint is not connected, then works again
-kubectl -n kube-system logs ds/retyc-csi-node -c retyc-csi-node | grep recovery:   # recreated, rebinding
+kubectl exec retycfs-writer -- ls /data             # Transport endpoint is not connected, then works again
+kubectl -n kube-system logs ds/retycfs-csi-node -c retycfs-csi-node | grep recovery:   # recreated, rebinding
 ```
 
 A consumer container may restart meanwhile, depending on its command: the writer of `rwx-test.yaml` fails its `date >>`
@@ -267,41 +267,41 @@ while the mount is dead and keeps looping, a command that exits on error restart
 **8. Node plugin restart.** No mount is cut:
 
 ```sh
-kubectl -n kube-system delete pod -l app.kubernetes.io/name=retyc-csi,app.kubernetes.io/component=node
+kubectl -n kube-system delete pod -l app.kubernetes.io/name=retycfs-csi,app.kubernetes.io/component=node
 mp                                                # same mount pod, same age
-kubectl logs --tail 3 retyc-reader                # no gap in the writer's lines
+kubectl logs --tail 3 retycfs-reader                # no gap in the writer's lines
 ```
 
 **9. Unstage.** Deleting the pods unstages the volume: the mount pod drains and is deleted, the staging path is
 unmounted.
 
 ```sh
-kubectl delete pod retyc-writer retyc-reader
+kubectl delete pod retycfs-writer retycfs-reader
 mp -w                                             # Terminating, then gone
 findmnt -t fuse.retycfs                           # nothing
-kubectl -n kube-system logs ds/retyc-csi-node -c retyc-csi-node | grep -E 'exited cleanly|unstaged'
-kubectl -n kube-system get secrets | grep retyc-mount   # gone with their pods
+kubectl -n kube-system logs ds/retycfs-csi-node -c retycfs-csi-node | grep -E 'exited cleanly|unstaged'
+kubectl -n kube-system get secrets | grep retycfs-mount   # gone with their pods
 ```
 
 **10. Admission policy.** Each of these is refused with the annotation's expected format:
 
 ```sh
-kubectl annotate pvc retyc-rwx-test csi.retyc.com/uid=abc --overwrite
-kubectl annotate pvc retyc-rwx-test csi.retyc.com/cache-ttl=-1s
-kubectl annotate pvc retyc-rwx-test csi.retyc.com/local-file='none *.tmp'
-kubectl annotate pvc retyc-rwx-test csi.retyc.com/mount-memory-limit=0
-kubectl annotate pvc retyc-rwx-test csi.retyc.com/uid-                     # removing the uid
+kubectl annotate pvc retycfs-rwx-test csi.retycfs.com/uid=abc --overwrite
+kubectl annotate pvc retycfs-rwx-test csi.retycfs.com/cache-ttl=-1s
+kubectl annotate pvc retycfs-rwx-test csi.retycfs.com/local-file='none *.tmp'
+kubectl annotate pvc retycfs-rwx-test csi.retycfs.com/mount-memory-limit=0
+kubectl annotate pvc retycfs-rwx-test csi.retycfs.com/uid-                     # removing the uid
 ```
 
-A valid change (`csi.retyc.com/uid=2000 --overwrite`) is accepted, and applies at the next mount.
+A valid change (`csi.retycfs.com/uid=2000 --overwrite`) is accepted, and applies at the next mount.
 
 **11. Redis.**
 
 ```sh
-helm upgrade retyc-csi /vagrant/charts/retyc-csi -n kube-system --reuse-values -f /vagrant/examples/redis-values.yaml --wait
+helm upgrade retycfs-csi /vagrant/charts/retycfs-csi -n kube-system --reuse-values -f /vagrant/examples/redis-values.yaml --wait
 kubectl apply -f examples/rwx-test.yaml           # a new stage: the mount pod uses the new cache settings
-kubectl -n kube-system get pod -l app.kubernetes.io/name=retyc-mount -o jsonpath='{.items[0].spec.containers[0].args}'   # --cache-store=redis --cache-redis-high-confidentiality
-kubectl -n kube-system exec retyc-csi-redis-0 -- sh -c 'redis-cli -a "$REDIS_PASSWORD" --no-auth-warning dbsize'
+kubectl -n kube-system get pod -l app.kubernetes.io/name=retycfs-mount -o jsonpath='{.items[0].spec.containers[0].args}'   # --cache-store=redis --cache-redis-high-confidentiality
+kubectl -n kube-system exec retycfs-csi-redis-0 -- sh -c 'redis-cli -a "$REDIS_PASSWORD" --no-auth-warning dbsize'
 ```
 
 The pod and variable names of the Redis subchart may differ between its versions: `kubectl -n kube-system get pods -l
@@ -311,8 +311,8 @@ remounted (`MountConfigChanged`).
 **12. Leader election.**
 
 ```sh
-helm upgrade retyc-csi /vagrant/charts/retyc-csi -n kube-system --reuse-values --set controller.replicas=2 --wait
-kubectl -n kube-system get lease | grep csi-retyc-com   # the provisioner's and the resizer's leases, one holder each
+helm upgrade retycfs-csi /vagrant/charts/retycfs-csi -n kube-system --reuse-values --set controller.replicas=2 --wait
+kubectl -n kube-system get lease | grep csi-retycfs-com   # the provisioner's and the resizer's leases, one holder each
 kubectl -n kube-system delete pod <the holder>          # the other replica takes over
 kubectl apply -f examples/rwx-test.yaml                 # still provisioned
 ```
@@ -329,8 +329,8 @@ and ReadWriteOncePod access mode already in-use`; the mount pod is the first pod
 transient `unbound immediate PersistentVolumeClaims` while the claim is still being provisioned: it goes away once the
 claim is `Bound`.
 
-**14. Tenant fail-closed.** A static PV of a tenant class (`retyc-rwx-tenant`) without `nodeStageSecretRef` must not be
-mounted with the driver's global identity. Take `examples/static-pv.yaml`, set `storageClassName: retyc-rwx-tenant`
+**14. Tenant fail-closed.** A static PV of a tenant class (`retycfs-rwx-tenant`) without `nodeStageSecretRef` must not be
+mounted with the driver's global identity. Take `examples/static-pv.yaml`, set `storageClassName: retycfs-rwx-tenant`
 and a dataroom ID you created for the test, and leave the `nodeStageSecretRef` block commented out; a consumer pod
 then stays in `ContainerCreating`:
 
@@ -339,7 +339,7 @@ kubectl describe pod <consumer>                  # FailedMount ... FailedPrecond
 mp                                               # no mount pod was created
 ```
 
-Uncomment `nodeStageSecretRef` with the Secret of `examples/tenant.yaml` (`retyc-credentials`, in the claim's
+Uncomment `nodeStageSecretRef` with the Secret of `examples/tenant.yaml` (`retycfs-credentials`, in the claim's
 namespace): the stage goes through.
 
 **15. Events on the claim.** `MountGaveUp`, `MountFailed`, `WritesLost` and `MountOOMKilled` are Events **of the PVC**, in the PVC's
@@ -354,18 +354,18 @@ namespace (`kubectl describe pvc <claim>`, `kubectl get events -n <ns>`), not of
   risk with a Redis that does not answer, such as an unrouted address:
 
   ```sh
-  helm upgrade retyc-csi /vagrant/charts/retyc-csi -n kube-system --reuse-values \
+  helm upgrade retycfs-csi /vagrant/charts/retycfs-csi -n kube-system --reuse-values \
     --set cache.store=redis --set cache.redis.subchart.enabled=false \
     --set cache.redis.external.url=redis://10.255.255.1:6379
   kubectl apply -f examples/rwx-test.yaml          # the mount pod exits 1 before it is ever ready
-  kubectl describe pvc retyc-rwx-test              # MountFailed ("failed before mounting it (nothing was written)")
+  kubectl describe pvc retycfs-rwx-test              # MountFailed ("failed before mounting it (nothing was written)")
   ```
 
   `WritesLost` is for a pod that exits `75` (or, with a CLI older than that code, `1` with an output that reports lost
   files); it is not provoked on purpose (it needs a cut API during a drain). Put `cache.store=memory` back afterwards.
 - `MountOOMKilled`, without writing anything, on a claim in use by a pod that mounts it with
   `mountPropagation: HostToContainer`:
-  - **OOM kill**: annotate the claim with `csi.retyc.com/mount-memory-limit: 200Mi`, under the ~270 MiB the key
+  - **OOM kill**: annotate the claim with `csi.retycfs.com/mount-memory-limit: 200Mi`, under the ~270 MiB the key
     unlocking takes at start, and remount it (restart the pod). The mount pod is killed `137` at each start; the claim
     gets a `MountOOMKilled` "killed at its memory limit (200Mi)" for every kill. Remove the annotation and remount.
     A walk alone (`ls -lR` of 85 000 files at `300Mi`) does not get there: the kernel reclaims, the cgroup stays at

@@ -15,7 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/retyc/retyc-k8s-csi/internal/identity"
+	"github.com/retyc/retycfs-k8s-csi/internal/identity"
 	"os/exec"
 	"regexp"
 	"slices"
