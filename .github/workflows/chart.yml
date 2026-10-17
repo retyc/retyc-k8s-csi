@@ -1,8 +1,8 @@
 name: Chart
 
-# Publishes charts/retyc-csi whenever its Chart.yaml version changes on master: a GitHub release
+# Publishes charts/retycfs-csi whenever its Chart.yaml version changes on master: a GitHub release
 # per chart version, the index.yaml of the Helm repository on the gh-pages branch (served at
-# https://retyc.github.io/retyc-k8s-csi), and the same package on the OCI registry.
+# https://retyc.github.io/retycfs-k8s-csi), and the same package on the OCI registry.
 on:
   push:
     branches: [master]
@@ -36,10 +36,10 @@ jobs:
 
       # The Redis subchart (Chart.lock): packaged into the chart's .tgz.
       - name: Dependencies
-        run: helm dependency build charts/retyc-csi
+        run: helm dependency build charts/retycfs-csi
 
       - name: Lint
-        run: helm lint charts/retyc-csi
+        run: helm lint charts/retycfs-csi
 
       # Packages charts whose version has no release yet, creates the release with the .tgz,
       # and regenerates index.yaml on gh-pages. Chart releases are not marked "latest" so the

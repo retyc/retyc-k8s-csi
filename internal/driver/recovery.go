@@ -17,7 +17,7 @@ import (
 	"k8s.io/klog/v2"
 	mountutils "k8s.io/mount-utils"
 
-	"github.com/retyc/retyc-k8s-csi/internal/mountpod"
+	"github.com/retyc/retycfs-k8s-csi/internal/mountpod"
 )
 
 // procMountInfo is read from the node plugin's own mount namespace, which sees kubelet's staging
@@ -169,7 +169,7 @@ func (s *NodeServer) pruneBackoffs(ctx context.Context, states []mountpod.State)
 	}
 }
 
-// Metric states of a mount pod (retyc_csi_mount_pods{state}).
+// Metric states of a mount pod (retycfs_csi_mount_pods{state}).
 const (
 	statePending     = "pending"
 	stateRunning     = "running" // running, not ready

@@ -1,14 +1,14 @@
 {{/*
 Expand the name of the chart.
 */}}
-{{- define "retyc-csi.name" -}}
+{{- define "retycfs-csi.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{/*
 Fully qualified app name, truncated to the DNS label limit.
 */}}
-{{- define "retyc-csi.fullname" -}}
+{{- define "retycfs-csi.fullname" -}}
 {{- if .Values.fullnameOverride }}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
 {{- else }}
@@ -21,44 +21,44 @@ Fully qualified app name, truncated to the DNS label limit.
 {{- end }}
 {{- end }}
 
-{{- define "retyc-csi.chart" -}}
+{{- define "retycfs-csi.chart" -}}
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{/*
 The CSI driver name is compiled into the binary and cannot be changed here.
 */}}
-{{- define "retyc-csi.driverName" -}}
-csi.retyc.com
+{{- define "retycfs-csi.driverName" -}}
+csi.retycfs.com
 {{- end }}
 
-{{- define "retyc-csi.labels" -}}
-helm.sh/chart: {{ include "retyc-csi.chart" . }}
-{{ include "retyc-csi.selectorLabels" . }}
+{{- define "retycfs-csi.labels" -}}
+helm.sh/chart: {{ include "retycfs-csi.chart" . }}
+{{ include "retycfs-csi.selectorLabels" . }}
 app.kubernetes.io/version: {{ .Values.image.tag | default .Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
-{{- define "retyc-csi.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "retyc-csi.name" . }}
+{{- define "retycfs-csi.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "retycfs-csi.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
-{{- define "retyc-csi.image" -}}
+{{- define "retycfs-csi.image" -}}
 {{- printf "%s:%s" .Values.image.repository (.Values.image.tag | default .Chart.AppVersion) }}
 {{- end }}
 
-{{- define "retyc-csi.controller.serviceAccountName" -}}
+{{- define "retycfs-csi.controller.serviceAccountName" -}}
 {{- if .Values.serviceAccount.controller.create }}
-{{- default (printf "%s-controller" (include "retyc-csi.fullname" .)) .Values.serviceAccount.controller.name }}
+{{- default (printf "%s-controller" (include "retycfs-csi.fullname" .)) .Values.serviceAccount.controller.name }}
 {{- else }}
 {{- default "default" .Values.serviceAccount.controller.name }}
 {{- end }}
 {{- end }}
 
-{{- define "retyc-csi.node.serviceAccountName" -}}
+{{- define "retycfs-csi.node.serviceAccountName" -}}
 {{- if .Values.serviceAccount.node.create }}
-{{- default (printf "%s-node" (include "retyc-csi.fullname" .)) .Values.serviceAccount.node.name }}
+{{- default (printf "%s-node" (include "retycfs-csi.fullname" .)) .Values.serviceAccount.node.name }}
 {{- else }}
 {{- default "default" .Values.serviceAccount.node.name }}
 {{- end }}
@@ -67,18 +67,18 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{/*
 Name of the Secret carrying the cluster-wide identity, or "" when the driver runs without one.
 */}}
-{{- define "retyc-csi.credentialsSecretName" -}}
+{{- define "retycfs-csi.credentialsSecretName" -}}
 {{- if .Values.credentials.existingSecret }}
 {{- .Values.credentials.existingSecret }}
 {{- else if and .Values.credentials.create .Values.credentials.token }}
-{{- printf "%s-credentials" (include "retyc-csi.fullname" .) }}
+{{- printf "%s-credentials" (include "retycfs-csi.fullname" .) }}
 {{- end }}
 {{- end }}
 
 {{/*
 True when at least one StorageClass uses per-namespace Secrets (the provisioner then needs to read them).
 */}}
-{{- define "retyc-csi.usesTenantSecrets" -}}
+{{- define "retycfs-csi.usesTenantSecrets" -}}
 {{- $uses := false }}
 {{- range .Values.storageClasses }}{{ if .tenantSecretName }}{{ $uses = true }}{{ end }}{{ end }}
 {{- $uses }}
@@ -87,8 +87,8 @@ True when at least one StorageClass uses per-namespace Secrets (the provisioner 
 {{/*
 envFrom block for the cluster-wide identity, if any.
 */}}
-{{- define "retyc-csi.credentialsEnvFrom" -}}
-{{- with include "retyc-csi.credentialsSecretName" . }}
+{{- define "retycfs-csi.credentialsEnvFrom" -}}
+{{- with include "retycfs-csi.credentialsSecretName" . }}
 envFrom:
   - secretRef:
       name: {{ . }}
@@ -99,8 +99,8 @@ envFrom:
 The StorageClasses this release renders, as a JSON list of names: those with a tenantSecretName,
 and the others only when a cluster-wide identity exists.
 */}}
-{{- define "retyc-csi.storageClassNames" -}}
-{{- $global := include "retyc-csi.credentialsSecretName" . }}
+{{- define "retycfs-csi.storageClassNames" -}}
+{{- $global := include "retycfs-csi.credentialsSecretName" . }}
 {{- $names := list }}
 {{- range .Values.storageClasses }}
 {{- if or .tenantSecretName $global }}{{ $names = append $names .name }}{{ end }}
@@ -112,7 +112,7 @@ and the others only when a cluster-wide identity exists.
 "true" when csi-provisioner and csi-resizer run with --leader-election: more than one controller
 replica, or the flag set by hand in either sidecar's extraArgs.
 */}}
-{{- define "retyc-csi.leaderElection" -}}
+{{- define "retycfs-csi.leaderElection" -}}
 {{- $c := .Values.controller }}
 {{- or (gt (int $c.replicas) 1) (has "--leader-election" $c.provisioner.extraArgs) (has "--leader-election" $c.resizer.extraArgs) }}
 {{- end }}
@@ -121,7 +121,7 @@ replica, or the flag set by hand in either sidecar's extraArgs.
 Secret and key holding RETYC_CACHE_REDIS_URL for the node plugin, as "name/key", or "" with the
 memory cache. Fails on cache.store: redis without a Redis.
 */}}
-{{- define "retyc-csi.redisURLSecret" -}}
+{{- define "retycfs-csi.redisURLSecret" -}}
 {{- $c := .Values.cache }}
 {{- if eq $c.store "redis" }}
 {{- if and $c.redis.subchart.enabled $c.redis.subchart.existingSecret }}
@@ -131,11 +131,11 @@ memory cache. Fails on cache.store: redis without a Redis.
 {{- end }}
 {{- printf "%s/RETYC_CACHE_REDIS_URL" $c.redis.subchart.existingSecret }}
 {{- else if $c.redis.subchart.enabled }}
-{{- printf "%s/RETYC_CACHE_REDIS_URL" (include "retyc-csi.redisAuthSecretName" .) }}
+{{- printf "%s/RETYC_CACHE_REDIS_URL" (include "retycfs-csi.redisAuthSecretName" .) }}
 {{- else if $c.redis.external.existingSecret }}
 {{- printf "%s/%s" $c.redis.external.existingSecret $c.redis.external.existingSecretKey }}
 {{- else if $c.redis.external.url }}
-{{- printf "%s/RETYC_CACHE_REDIS_URL" (include "retyc-csi.redisAuthSecretName" .) }}
+{{- printf "%s/RETYC_CACHE_REDIS_URL" (include "retycfs-csi.redisAuthSecretName" .) }}
 {{- else }}
 {{- fail "cache.store is redis: enable cache.redis.subchart or set cache.redis.external.url or existingSecret" }}
 {{- end }}
@@ -146,14 +146,14 @@ memory cache. Fails on cache.store: redis without a Redis.
 Name of the Secret the chart creates for Redis (subchart password and URL, or the external URL).
 Built from the release name alone: the subchart's auth.existingSecret refers to it the same way.
 */}}
-{{- define "retyc-csi.redisAuthSecretName" -}}
+{{- define "retycfs-csi.redisAuthSecretName" -}}
 {{- printf "%s-redis-auth" .Release.Name | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{/*
 Service of the Redis subchart, as the CloudPirates chart names it (cloudpirates.fullname).
 */}}
-{{- define "retyc-csi.redisSubchartHost" -}}
+{{- define "retycfs-csi.redisSubchartHost" -}}
 {{- $r := .Values.redis | default dict }}
 {{- $name := "" }}
 {{- if $r.fullnameOverride }}

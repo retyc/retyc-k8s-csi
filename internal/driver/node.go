@@ -24,8 +24,8 @@ import (
 	"k8s.io/klog/v2"
 	mountutils "k8s.io/mount-utils"
 
-	"github.com/retyc/retyc-k8s-csi/internal/identity"
-	"github.com/retyc/retyc-k8s-csi/internal/mountpod"
+	"github.com/retyc/retycfs-k8s-csi/internal/identity"
+	"github.com/retyc/retycfs-k8s-csi/internal/mountpod"
 )
 
 // Mounter is what the node plugin needs from the host's mount table (mount.Mounter).
@@ -527,7 +527,7 @@ func (s *NodeServer) emitExit(ctx context.Context, st mountpod.State) {
 		s.event(s.claimRef(ctx, st.PVCNamespace, st.PVCName), corev1.EventTypeWarning, reasonMountOOM,
 			"The mount pod of volume %s on node %s %s: files being written then may not have reached Retyc. "+
 				"Every file or folder walked holds memory until the kernel forgets it; raise the "+
-				"csi.retyc.com/mount-memory-limit annotation of the claim", st.VolumeID, st.NodeName, how)
+				"csi.retycfs.com/mount-memory-limit annotation of the claim", st.VolumeID, st.NodeName, how)
 	default:
 		klog.Warningf("mount pod %s of volume %s exited with code %d (%s): %s", st.Name, st.VolumeID, code,
 			mountpod.ExitLabel(st), st.ExitMessage)

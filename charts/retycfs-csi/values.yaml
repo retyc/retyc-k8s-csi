@@ -1,8 +1,8 @@
-# Default values for retyc-csi.
+# Default values for retycfs-csi.
 
 image:
-  # Docker Hub mirror: retyc/retyc-k8s-csi (same digest).
-  repository: ghcr.io/retyc/retyc-k8s-csi
+  # Docker Hub mirror: retyc/retycfs-k8s-csi (same digest).
+  repository: ghcr.io/retyc/retycfs-k8s-csi
   # -- Overrides the image tag; defaults to the chart's appVersion.
   tag: ""
   pullPolicy: IfNotPresent
@@ -34,26 +34,26 @@ storageClasses:
   # and kubelet resolve a Secret of that name in the claim's namespace instead of using the
   # driver's own credentials. A class without it is only rendered when a cluster-wide identity
   # exists (see `credentials`).
-  - name: retyc-rwx
+  - name: retycfs-rwx
     reclaimPolicy: Delete
     volumeBindingMode: Immediate
     isDefault: false
     annotations: {}
     tenantSecretName: ""
-  - name: retyc-rwx-retain
+  - name: retycfs-rwx-retain
     reclaimPolicy: Retain
     volumeBindingMode: Immediate
     isDefault: false
     annotations: {}
     tenantSecretName: ""
-  - name: retyc-rwx-tenant
+  - name: retycfs-rwx-tenant
     # Retain on purpose: a tenant deleting its Secret before its claims would otherwise leave PVs
     # stuck on a DeleteVolume that can no longer authenticate.
     reclaimPolicy: Retain
     volumeBindingMode: Immediate
     isDefault: false
     annotations: {}
-    tenantSecretName: retyc-credentials
+    tenantSecretName: retycfs-credentials
 
 rbac:
   # -- Create the ClusterRoles/ClusterRoleBindings for the provisioner and the resizer.
@@ -72,7 +72,7 @@ serviceAccount:
     annotations: {}
 
 # -- Extra Kubernetes objects to deploy with the release, each one rendered as a template (so
-# `{{ .Release.Namespace }}` and `{{ include "retyc-csi.fullname" . }}` work). Use it for anything
+# `{{ .Release.Namespace }}` and `{{ include "retycfs-csi.fullname" . }}` work). Use it for anything
 # your cluster requires around the driver without patching the chart: a NetworkPolicy on a
 # default-deny cluster, a CiliumNetworkPolicy, a Secret from an external-secrets operator...
 #
@@ -82,13 +82,13 @@ serviceAccount:
 # DNS. Example, with the Retyc endpoints as CIDRs since a plain NetworkPolicy has no notion of
 # hostname: the first policy opens the subchart's Redis to the mount pods only, the second limits
 # the mount pods' egress to DNS, Redis and the Retyc API. The mount pods carry
-# app.kubernetes.io/name=retyc-mount, the subchart's pods app.kubernetes.io/name=redis.
+# app.kubernetes.io/name=retycfs-mount, the subchart's pods app.kubernetes.io/name=redis.
 #
 # extraObjects:
 #   - apiVersion: networking.k8s.io/v1
 #     kind: NetworkPolicy
 #     metadata:
-#       name: '{{ include "retyc-csi.fullname" . }}-redis'
+#       name: '{{ include "retycfs-csi.fullname" . }}-redis'
 #       namespace: '{{ .Release.Namespace }}'
 #     spec:
 #       podSelector:
@@ -99,16 +99,16 @@ serviceAccount:
 #       ingress:
 #         - from:
 #             - podSelector:
-#                 matchLabels: {app.kubernetes.io/name: retyc-mount}
+#                 matchLabels: {app.kubernetes.io/name: retycfs-mount}
 #           ports: [{protocol: TCP, port: 6379}]
 #   - apiVersion: networking.k8s.io/v1
 #     kind: NetworkPolicy
 #     metadata:
-#       name: '{{ include "retyc-csi.fullname" . }}-mount-egress'
+#       name: '{{ include "retycfs-csi.fullname" . }}-mount-egress'
 #       namespace: '{{ .Release.Namespace }}'
 #     spec:
 #       podSelector:
-#         matchLabels: {app.kubernetes.io/name: retyc-mount}
+#         matchLabels: {app.kubernetes.io/name: retycfs-mount}
 #       policyTypes: [Egress]
 #       egress:
 #         - to:                                   # cluster DNS
@@ -180,7 +180,7 @@ controller:
   #             topologyKey: kubernetes.io/hostname
   #             labelSelector:
   #               matchLabels:
-  #                 app.kubernetes.io/name: retyc-csi
+  #                 app.kubernetes.io/name: retycfs-csi
   #                 app.kubernetes.io/component: controller
   #   topologySpreadConstraints:
   #     - maxSkew: 1
@@ -188,7 +188,7 @@ controller:
   #       whenUnsatisfiable: ScheduleAnyway
   #       labelSelector:
   #         matchLabels:
-  #           app.kubernetes.io/name: retyc-csi
+  #           app.kubernetes.io/name: retycfs-csi
   #           app.kubernetes.io/component: controller
   replicas: 1
   # -- Extra /etc/hosts entries of the controller pods.
@@ -316,7 +316,7 @@ mount:
   hostAliases: []
   # -- Share the host PID namespace (not needed so far, kept for diagnosis).
   hostPID: false
-  # -- Default resources of a mount pod, overridden per claim by the csi.retyc.com/mount-cpu-request,
+  # -- Default resources of a mount pod, overridden per claim by the csi.retycfs.com/mount-cpu-request,
   # -cpu-limit, -memory-request and -memory-limit annotations. Unlocking the AGE key (scrypt) takes
   # about 256 MiB at start.
   resources:
@@ -330,7 +330,7 @@ mount:
   # -- Priority class of the mount pods; empty means system-node-critical.
   priorityClassName: ""
   # -- Host directory of the spools (files not sent yet), one subdirectory per volume.
-  spoolDir: /var/lib/retyc-csi/spool
+  spoolDir: /var/lib/retycfs-csi/spool
 
 # Listing cache of the mount pods (`retyc fs mount --cache-store`). `memory` (the CLI's default)
 # keeps one cache per mount pod. `redis` shares one Redis between every mount pod of the cluster:
@@ -372,8 +372,8 @@ cache:
       existingSecretKey: RETYC_CACHE_REDIS_URL
 
 # ValidatingAdmissionPolicy (admissionregistration.k8s.io/v1) on the claims of the chart's
-# StorageClasses: checks the csi.retyc.com/* annotations at creation and update, and refuses a claim
-# without csi.retyc.com/uid or one that drops it. Only the classes rendered by this release are
+# StorageClasses: checks the csi.retycfs.com/* annotations at creation and update, and refuses a claim
+# without csi.retycfs.com/uid or one that drops it. Only the classes rendered by this release are
 # known: a claim that gets one of them later as the cluster default (retroactive default class
 # assignment, on a claim created without storageClassName) and a static PV's claim on another
 # class are not checked; the driver still refuses them at CreateVolume or at stage.
@@ -399,7 +399,7 @@ redis:
     pullPolicy: IfNotPresent
   auth:
     enabled: true
-    # The Secret the chart creates (password and URL); must stay in sync with retyc-csi's.
+    # The Secret the chart creates (password and URL); must stay in sync with retycfs-csi's.
     existingSecret: '{{ .Release.Name }}-redis-auth'
     existingSecretPasswordKey: redis-password
   persistence:

@@ -57,8 +57,8 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: |
-            name=ghcr.io/retyc/retyc-k8s-csi
-            name=retyc/retyc-k8s-csi,enable=${{ github.event_name != 'workflow_dispatch' }}
+            name=ghcr.io/retyc/retycfs-k8s-csi
+            name=retyc/retycfs-k8s-csi,enable=${{ github.event_name != 'workflow_dispatch' }}
           tags: |
             type=semver,pattern={{raw}},enable=${{ github.event_name == 'push' }}
             type=ref,event=branch,enable=${{ github.event_name == 'push' && github.ref_name == github.event.repository.default_branch }}
@@ -66,7 +66,7 @@ jobs:
 
       # The version compiled into the driver (GetPluginInfo) and set as the OCI label is not the
       # image tag: an untagged build gets a `git describe` version (v1.2.3-4-gabc1234), from the
-      # driver's v* tags only — the chart's retyc-csi-* release tags live in the same repository.
+      # driver's v* tags only — the chart's retycfs-csi-* release tags live in the same repository.
       # A tag push uses the pushed tag itself, which `git describe` could not tell from another
       # tag on the same commit.
       - name: Image version and build date

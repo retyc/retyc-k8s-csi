@@ -1,5 +1,5 @@
 {{- /* A class without tenantSecretName needs the cluster-wide identity: skipped without one (NOTES). */ -}}
-{{- $global := include "retyc-csi.credentialsSecretName" . }}
+{{- $global := include "retycfs-csi.credentialsSecretName" . }}
 {{- range .Values.storageClasses }}
 {{- if or .tenantSecretName $global }}
 ---
@@ -8,7 +8,7 @@ kind: StorageClass
 metadata:
   name: {{ .name }}
   labels:
-    {{- include "retyc-csi.labels" $ | nindent 4 }}
+    {{- include "retycfs-csi.labels" $ | nindent 4 }}
   annotations:
     {{- if .isDefault }}
     storageclass.kubernetes.io/is-default-class: "true"
@@ -16,7 +16,7 @@ metadata:
     {{- with .annotations }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
-provisioner: {{ include "retyc-csi.driverName" $ }}
+provisioner: {{ include "retycfs-csi.driverName" $ }}
 reclaimPolicy: {{ .reclaimPolicy | default "Delete" }}
 allowVolumeExpansion: true
 volumeBindingMode: {{ .volumeBindingMode | default "Immediate" }}

@@ -17,11 +17,11 @@ metadata:
     app: privatebin
   annotations:
     # Owner of every file of the volume: the UID and GID PrivateBin runs as (securityContext below).
-    csi.retyc.com/uid: "65534"
-    csi.retyc.com/gid: "82"
+    csi.retycfs.com/uid: "65534"
+    csi.retycfs.com/gid: "82"
 spec:
   accessModes: [ReadWriteMany]
-  storageClassName: retyc-rwx
+  storageClassName: retycfs-rwx
   resources:
     requests:
       storage: 1Gi
@@ -106,7 +106,7 @@ spec:
     spec:
       automountServiceAccountToken: false
       # No fsGroup: the driver declares fsGroupPolicy None. The volume belongs to the claim's
-      # csi.retyc.com/uid and gid, so the pods run as exactly that UID to write.
+      # csi.retycfs.com/uid and gid, so the pods run as exactly that UID to write.
       securityContext:
         runAsUser: 65534
         runAsGroup: 82

@@ -4,8 +4,8 @@ The commands below use `kube-system`, the namespace of the README's install; rep
 driver pods, the mount pods and the claim's events:
 
 ```sh
-kubectl -n kube-system get pods -l app.kubernetes.io/name=retyc-csi -o wide
-kubectl -n kube-system get pods -l app.kubernetes.io/name=retyc-mount -o wide -L csi.retyc.com/pvc,csi.retyc.com/node
+kubectl -n kube-system get pods -l app.kubernetes.io/name=retycfs-csi -o wide
+kubectl -n kube-system get pods -l app.kubernetes.io/name=retycfs-mount -o wide -L csi.retycfs.com/pvc,csi.retycfs.com/node
 kubectl describe pvc <claim>                     # provisioning, expansion and mount events
 kubectl describe pod <pod using the claim>       # FailedMount: the stage's own message
 ```
@@ -13,14 +13,14 @@ kubectl describe pod <pod using the claim>       # FailedMount: the stage's own 
 The controller pods must be `3/3` (csi-provisioner, csi-resizer, driver), the node pods `2/2`. Logs:
 
 ```sh
-kubectl -n kube-system logs deploy/retyc-csi-controller -c retyc-csi-controller
-kubectl -n kube-system logs deploy/retyc-csi-controller -c csi-provisioner
-kubectl -n kube-system logs ds/retyc-csi-node -c retyc-csi-node        # one node's; pick the pod of the node with -o wide
+kubectl -n kube-system logs deploy/retycfs-csi-controller -c retycfs-csi-controller
+kubectl -n kube-system logs deploy/retycfs-csi-controller -c csi-provisioner
+kubectl -n kube-system logs ds/retycfs-csi-node -c retycfs-csi-node        # one node's; pick the pod of the node with -o wide
 kubectl -n kube-system logs <mount pod>                                # the retyc fs mount of one volume on one node
 ```
 
-A mount pod is `retyc-mount-<hash>`, one per volume and per node; find the one of a claim on a node with
-`-l csi.retyc.com/pvc=<claim>,csi.retyc.com/namespace=<namespace>` (label values that are not valid labels are
+A mount pod is `retycfs-mount-<hash>`, one per volume and per node; find the one of a claim on a node with
+`-l csi.retycfs.com/pvc=<claim>,csi.retycfs.com/namespace=<namespace>` (label values that are not valid labels are
 hashed; the annotations of the same names hold the exact values).
 
 ## Reading a mount pod's logs
@@ -28,7 +28,7 @@ hashed; the annotations of the same names hold the exact values).
 The CLI logs to the mount pod's output, which **disappears with the pod**: once a mount pod is deleted (unstage,
 recreation), `kubectl logs` has nothing left. While it exists:
 
-- `kubectl -n kube-system logs <mount pod>`, also after its container exited: the finalizer `csi.retyc.com/in-use`
+- `kubectl -n kube-system logs <mount pod>`, also after its container exited: the finalizer `csi.retycfs.com/in-use`
   keeps the pod object until the node plugin has read its exit code;
 - `kubectl -n kube-system get pod <mount pod> -o yaml`: `status.containerStatuses[0].state.terminated` holds the exit
   code and, thanks to `terminationMessagePolicy: FallbackToLogsOnError`, the end of the log of a failed CLI. The node
@@ -59,19 +59,19 @@ It is a live log of the operations, numbers only: no file names.
 
 | Reason | Meaning | What to do |
 |--------|---------|------------|
-| `MountGaveUp` | three exits in a row with `77` or `78` on a node: the credentials are refused. Stages of the volume on that node fail at once with `FailedPrecondition`, without a new pod | fix the token or passphrase (the driver's Secret, or the tenant's `retyc-credentials`). New values give another config hash and a fresh series of tries. The exited mount pod is released within 30 s (the volume was never staged), but the give-up stays for 30 minutes after the last stage that found it. After fixing something the hash does not cover (the account, the API side), restart the node plugin pod of that node (it cuts no mount) to start a full series of tries there; deleting the exited mount pod by hand before it is released, or an unstage of the volume, does the same |
+| `MountGaveUp` | three exits in a row with `77` or `78` on a node: the credentials are refused. Stages of the volume on that node fail at once with `FailedPrecondition`, without a new pod | fix the token or passphrase (the driver's Secret, or the tenant's `retycfs-credentials`). New values give another config hash and a fresh series of tries. The exited mount pod is released within 30 s (the volume was never staged), but the give-up stays for 30 minutes after the last stage that found it. After fixing something the hash does not cover (the account, the API side), restart the node plugin pod of that node (it cuts no mount) to start a full series of tries there; deleting the exited mount pod by hand before it is released, or an unstage of the volume, does the same |
 | `WritesLost` | a mount pod exited with code `75` when the node plugin released it, or with `1` or `77` and an output that reports lost files (`... not sent before the filesystem was unmounted`: a CLI older than `75`, or a login lost at the same time): files a pod believed written that never reached Retyc (the drain timed out, the API refused) | check the message; find out why the drain did not finish (`mount.drainTimeout`, API errors, a pod killed by a drain or a delete) |
 | `MountFailed` | a mount pod exited with code `1` and its output reports no lost file. Before it was ever ready (`failed before mounting it`), a failure at start, nothing was written (Redis unreachable or too old, a mount point left dead, the API refused at start); after (`failed after mounting it`), the mount stopped on an error but reported no lost write | read the output in the event; see [Mount pods exit `1` at start with Redis](#mount-pods-exit-1-at-start-with-redis) |
-| `MountOOMKilled` | a mount pod was killed at its memory limit (`137`, `reason: OOMKilled`), or killed (`137`) while no deletion asked it to stop, which containerd does not always report as `OOMKilled` ("most likely at its memory limit"; a `kill -9` gives the same), and is recreated; files being written then may not have reached Retyc. A walk of a large dataroom (an indexer, a backup, `ls -lR`) holds memory for every entry until the kernel forgets it, which a mount pod's own limit does not make it do | raise `csi.retyc.com/mount-memory-limit` on the claim, or `mount.resources`; see [architecture.md](architecture.md#mount-pods) for the sizing |
+| `MountOOMKilled` | a mount pod was killed at its memory limit (`137`, `reason: OOMKilled`), or killed (`137`) while no deletion asked it to stop, which containerd does not always report as `OOMKilled` ("most likely at its memory limit"; a `kill -9` gives the same), and is recreated; files being written then may not have reached Retyc. A walk of a large dataroom (an indexer, a backup, `ls -lR`) holds memory for every entry until the kernel forgets it, which a mount pod's own limit does not make it do | raise `csi.retycfs.com/mount-memory-limit` on the claim, or `mount.resources`; see [architecture.md](architecture.md#mount-pods) for the sizing |
 | `MountConfigChanged` | the volume's settings changed (annotations, credentials, `mount.*` or `cache.*` values, image) while the volume is in use on a node: its mount pod keeps the former ones | remount the volume on that node: move or restart the pods using it there, all of them, so that it is unstaged and staged again |
 
 `ProvisioningFailed`, `VolumeResizeFailed` and `VolumeModifyFailed` come from the sidecars and carry the controller's
 CSI error (see [architecture.md](architecture.md#errors-of-the-controller)).
 
-## Claim refused at creation: `denied request: ValidatingAdmissionPolicy ... csi.retyc.com/uid is required`
+## Claim refused at creation: `denied request: ValidatingAdmissionPolicy ... csi.retycfs.com/uid is required`
 
-The chart's admission policy refuses a claim of its StorageClasses without `csi.retyc.com/uid`, an update that removes
-it, and any `csi.retyc.com/*` annotation with a value the driver would refuse; the message names the annotation and the
+The chart's admission policy refuses a claim of its StorageClasses without `csi.retycfs.com/uid`, an update that removes
+it, and any `csi.retycfs.com/*` annotation with a value the driver would refuse; the message names the annotation and the
 expected format. Add the annotation (for a StatefulSet, in the `volumeClaimTemplates`). See
 [configuration.md](configuration.md#pvc-annotations).
 
@@ -79,7 +79,7 @@ expected format. Add the annotation (for a StatefulSet, in the `volumeClaimTempl
 
 `kubectl describe pvc` shows the provisioner's event:
 
-- `InvalidArgument ... annotation csi.retyc.com/uid is required`: the claim has no owner annotation and the policy did
+- `InvalidArgument ... annotation csi.retycfs.com/uid is required`: the claim has no owner annotation and the policy did
   not see it (disabled, or the class came later as the cluster default). Nothing was created on the Retyc side; add the
   annotation;
 - `OutOfRange ... below the smallest dataroom reservation`: the claim sets a limit below 20 GiB;
@@ -90,7 +90,7 @@ expected format. Add the annotation (for a StatefulSet, in the `volumeClaimTempl
   passphrase. `... refuses the retyc CLI of the driver image as too old`: upgrade the driver;
 - `PermissionDenied`: the API answered 403 (the identity is only a viewer, or the account is over its plan);
 - `Unavailable` with an `API error 429`: the API's rate limit held after the CLI's own retries; the provisioner retries with its backoff;
-- `secret "retyc-credentials" not found`: a tenant class in a namespace without the Secret. The driver's own
+- `secret "retycfs-credentials" not found`: a tenant class in a namespace without the Secret. The driver's own
   credentials are never used for that class.
 
 ## Pod stuck in `ContainerCreating`
@@ -100,12 +100,12 @@ message says what it waits for.
 
 | Message | Cause |
 |---------|-------|
-| `mount pod retyc-mount-... is starting: ErrImagePull` / `ImagePullBackOff` | the retyc-cli image cannot be pulled: `mount.image`, `mount.imagePullSecrets` |
+| `mount pod retycfs-mount-... is starting: ErrImagePull` / `ImagePullBackOff` | the retyc-cli image cannot be pulled: `mount.image`, `mount.imagePullSecrets` |
 | `volume ... is not mounted yet` | the CLI is logging in and unlocking the key (a few seconds), or waits for the API; read the mount pod's log |
 | `mount pod ... exited (code N, ...), K failures in a row: restarting at ...` | the mount fails; the code and output say why (table above); the backoff goes up to 5 min |
 | `mount pod gave up; last output: ...` (`FailedPrecondition`) | credentials refused: see `MountGaveUp` |
-| `mount pod of volume ...: pods "retyc-mount-..." is forbidden: violates PodSecurity ...` | the driver's namespace does not allow privileged pods: label it `pod-security.kubernetes.io/enforce=privileged` |
-| `annotation csi.retyc.com/... : want ...` (`InvalidArgument`) | an annotation the driver refuses (the policy was bypassed), such as `local-file` with `none` among other patterns |
+| `mount pod of volume ...: pods "retycfs-mount-..." is forbidden: violates PodSecurity ...` | the driver's namespace does not allow privileged pods: label it `pod-security.kubernetes.io/enforce=privileged` |
+| `annotation csi.retycfs.com/... : want ...` (`InvalidArgument`) | an annotation the driver refuses (the policy was bypassed), such as `local-file` with `none` among other patterns |
 | `claim .../... not found` | the PV's `pvcName`/`pvcNamespace` point to a claim that no longer exists |
 | `no credentials: the StorageClass has no node-stage secret ...` | no cluster-wide identity, or an incomplete one |
 | `PV ... has no nodeStageSecretRef, but its StorageClass ... is a tenant class` (`FailedPrecondition`) | a static PV of a tenant class without `spec.csi.nodeStageSecretRef`: the driver's identity is not used in its place. Add the reference (see [configuration.md](configuration.md#static-pvs)) |
@@ -114,7 +114,7 @@ message says what it waits for.
 
 ## `Permission denied` on a write
 
-- The pod does not run as the claim's `csi.retyc.com/uid`: every file belongs to that UID (and to the GID, by
+- The pod does not run as the claim's `csi.retycfs.com/uid`: every file belongs to that UID (and to the GID, by
   default the same), and another UID only reads. Set `securityContext.runAsUser` (and `runAsGroup`), or change the
   annotation and remount. `fsGroup` changes nothing.
 - `rename` over an existing file fails with `EACCES` while other writes work: the identity is a **contributor** on the
@@ -122,7 +122,7 @@ message says what it waits for.
   that role.
 
 `Read-only file system` (`EROFS`): the identity only **views** the dataroom, its plan refuses writes, the claim has
-`csi.retyc.com/read-only: "true"`, or the pod mounts it read-only. The role is read at mount time: after a role change,
+`csi.retycfs.com/read-only: "true"`, or the pod mounts it read-only. The role is read at mount time: after a role change,
 remount the volume on each node.
 
 ## `Transport endpoint is not connected` inside a pod
@@ -139,7 +139,7 @@ seconds after a `kill -9`, more within the restart backoff); its log shows `reco
 - The node plugin logs `is mounted at ... but has no mount pod on this node`: the mount pod was deleted with its
   finalizer removed by hand. Reschedule the pods using the volume on that node.
 
-For an OOM kill (`137`, `reason: OOMKilled` in the mount pod's status), raise `csi.retyc.com/mount-memory-limit` on the
+For an OOM kill (`137`, `reason: OOMKilled` in the mount pod's status), raise `csi.retycfs.com/mount-memory-limit` on the
 claim, or `mount.resources`.
 
 ## Mount pod stays `Terminating`
@@ -153,7 +153,7 @@ would be left without a mount pod to repair it.
 
 ## Dead mount pods are not cleaned up, node plugin logs `cannot read kubelet's directory of the driver`
 
-The node plugin cannot list `<kubeletDir>/plugins/kubernetes.io/csi/csi.retyc.com`: `node.kubeletDir` is not kubelet's
+The node plugin cannot list `<kubeletDir>/plugins/kubernetes.io/csi/csi.retycfs.com`: `node.kubeletDir` is not kubelet's
 `--root-dir` (some distributions move it), or its plugins directory is not mounted in the node plugin. Kubelet's
 `vol_data.json` files are then out of sight, so the node plugin deletes no mount pod as an orphan until it can read the
 directory again. Set `node.kubeletDir` to the nodes' real kubelet directory.
@@ -162,18 +162,18 @@ directory again. Set `node.kubeletDir` to the nodes' real kubelet directory.
 
 Annotations, chart `mount.*` and `cache.*` values, the retyc-cli image and new tenant credentials are read when a node
 mounts the volume. A running mount pod keeps its own: the claim gets `MountConfigChanged`, and
-`retyc_csi_mount_pod_outdated` counts the pods on an older CLI. Remount the volume on the node (every pod using it there
+`retycfs_csi_mount_pod_outdated` counts the pods on an older CLI. Remount the volume on the node (every pod using it there
 gone, then back).
 
 ## `df` shows the old size after an expand
 
 The dataroom was enlarged (the PV and `retyc dataroom ls` show it), but a running mount caches the dataroom's stats for
-the cache TTL (1 min by default, `csi.retyc.com/cache-ttl`). Wait that long. If `df` still shows the old size after
+the cache TTL (1 min by default, `csi.retycfs.com/cache-ttl`). Wait that long. If `df` still shows the old size after
 several TTLs, it is a bug: report it with the claim, its annotations and the mount pod's logs.
 
 ## Writes from one node take long to appear on another
 
-Expected up to the cache TTL (1 min by default, `csi.retyc.com/cache-ttl`): a node sees another node's upload when its
+Expected up to the cache TTL (1 min by default, `csi.retycfs.com/cache-ttl`): a node sees another node's upload when its
 own listing cache expires. Changes made outside the cluster too. See
 [architecture.md](architecture.md#consistency).
 
@@ -204,4 +204,4 @@ the current chart (`rbac.create: true`), or add the verb to your own ClusterRole
 
 The driver container is not ready: `retyc auth status` does not report an authenticated account with the cluster-wide
 identity. Fix the token in the credentials Secret, then `kubectl -n kube-system rollout restart
-deploy/retyc-csi-controller`. Until then the previous controller pod, if any, keeps serving.
+deploy/retycfs-csi-controller`. Until then the previous controller pod, if any, keeps serving.

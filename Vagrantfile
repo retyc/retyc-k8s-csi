@@ -1,7 +1,7 @@
 # -*- mode: ruby -*-
 # vi: set ft=ruby :
 #
-# Single-node k3s test VM for retyc-k8s-csi (Debian 13 "trixie", libvirt/KVM). See doc/testing.md.
+# Single-node k3s test VM for retycfs-k8s-csi (Debian 13 "trixie", libvirt/KVM). See doc/testing.md.
 #
 # Host requirements: vagrant + vagrant-libvirt (`vagrant plugin install vagrant-libvirt`), a
 # running libvirtd with the qemu:///system URI, and your user in the `libvirt` group.
@@ -9,7 +9,7 @@
 
 Vagrant.configure("2") do |config|
   config.vm.box = "debian/trixie64"
-  config.vm.hostname = "retyc-csi"
+  config.vm.hostname = "retycfs-csi"
 
   # Traefik's entrypoints: web (the examples' ingresses) and jaeger (the Jaeger UI).
   config.vm.network "forwarded_port", guest: 80, host: 18080
@@ -18,7 +18,7 @@ Vagrant.configure("2") do |config|
   # rsync, not NFS/9p: host→guest one-way is all we need (the chart and the examples), and it
   # needs neither an NFS server nor sudo on the host. Re-run `vagrant rsync` after editing.
   config.vm.synced_folder ".", "/vagrant", type: "rsync",
-    rsync__exclude: [".git/", ".vagrant/", "retyc-k8s-csi", "dist/"]
+    rsync__exclude: [".git/", ".vagrant/", "retycfs-k8s-csi", "dist/"]
 
   config.vm.provider :libvirt do |lv|
     lv.driver = "kvm"

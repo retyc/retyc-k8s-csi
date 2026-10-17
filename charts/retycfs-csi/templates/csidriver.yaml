@@ -3,14 +3,14 @@
 apiVersion: storage.k8s.io/v1
 kind: CSIDriver
 metadata:
-  name: {{ include "retyc-csi.driverName" . }}
+  name: {{ include "retycfs-csi.driverName" . }}
   labels:
-    {{- include "retyc-csi.labels" . | nindent 4 }}
+    {{- include "retycfs-csi.labels" . | nindent 4 }}
 spec:
   attachRequired: false
   podInfoOnMount: false
   # kubelet must not chown/chmod the volume for a pod's fsGroup: RetycFS reports every file as
-  # owned by the claim's csi.retyc.com/uid and gid (`retyc fs mount --uid/--gid`), so a recursive
+  # owned by the claim's csi.retycfs.com/uid and gid (`retyc fs mount --uid/--gid`), so a recursive
   # chown would change nothing and walk the whole dataroom through the API. A pod writes by running
   # as that UID, not through fsGroup.
   fsGroupPolicy: None

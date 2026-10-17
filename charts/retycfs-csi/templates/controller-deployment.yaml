@@ -1,21 +1,21 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "retyc-csi.fullname" . }}-controller
+  name: {{ include "retycfs-csi.fullname" . }}-controller
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "retyc-csi.labels" . | nindent 4 }}
+    {{- include "retycfs-csi.labels" . | nindent 4 }}
     app.kubernetes.io/component: controller
 spec:
   replicas: {{ .Values.controller.replicas }}
   selector:
     matchLabels:
-      {{- include "retyc-csi.selectorLabels" . | nindent 6 }}
+      {{- include "retycfs-csi.selectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: controller
   template:
     metadata:
       labels:
-        {{- include "retyc-csi.selectorLabels" . | nindent 8 }}
+        {{- include "retycfs-csi.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: controller
         {{- with .Values.controller.podLabels }}
         {{- toYaml . | nindent 8 }}
@@ -28,7 +28,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
-      serviceAccountName: {{ include "retyc-csi.controller.serviceAccountName" . }}
+      serviceAccountName: {{ include "retycfs-csi.controller.serviceAccountName" . }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -49,7 +49,7 @@ spec:
             - --extra-create-metadata
             # CreateVolume runs several CLI calls; csi-provisioner's own default is 10s.
             - --timeout=60s
-            {{- if and (eq (include "retyc-csi.leaderElection" .) "true") (not (has "--leader-election" .Values.controller.provisioner.extraArgs)) }}
+            {{- if and (eq (include "retycfs-csi.leaderElection" .) "true") (not (has "--leader-election" .Values.controller.provisioner.extraArgs)) }}
             - --leader-election
             {{- end }}
             {{- range .Values.controller.provisioner.extraArgs }}
@@ -68,7 +68,7 @@ spec:
             # Each call runs `retyc dataroom set` (token refresh, API round-trips): 10 s by default is short.
             - --resize-timeout=60s
             - --modify-timeout=60s
-            {{- if and (eq (include "retyc-csi.leaderElection" .) "true") (not (has "--leader-election" .Values.controller.resizer.extraArgs)) }}
+            {{- if and (eq (include "retycfs-csi.leaderElection" .) "true") (not (has "--leader-election" .Values.controller.resizer.extraArgs)) }}
             - --leader-election
             {{- end }}
             {{- range .Values.controller.resizer.extraArgs }}
@@ -79,8 +79,8 @@ spec:
           volumeMounts:
             - name: socket-dir
               mountPath: /csi
-        - name: retyc-csi-controller
-          image: {{ include "retyc-csi.image" . }}
+        - name: retycfs-csi-controller
+          image: {{ include "retycfs-csi.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - --mode=controller
@@ -109,7 +109,7 @@ spec:
           env:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- include "retyc-csi.credentialsEnvFrom" . | nindent 10 }}
+          {{- include "retycfs-csi.credentialsEnvFrom" . | nindent 10 }}
           volumeMounts:
             - name: socket-dir
               mountPath: /csi

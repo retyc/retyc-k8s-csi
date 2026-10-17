@@ -10,31 +10,31 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 
-	"github.com/retyc/retyc-k8s-csi/internal/mountpod"
+	"github.com/retyc/retycfs-k8s-csi/internal/mountpod"
 )
 
 // PVC annotations read by the driver (see doc/configuration.md).
 const (
 	// AnnotationUID is the owner UID of every file in the mounted volume (`retyc fs mount --uid`).
 	// Mandatory: CreateVolume refuses a claim without it.
-	AnnotationUID = "csi.retyc.com/uid"
+	AnnotationUID = "csi.retycfs.com/uid"
 	// AnnotationGID is the owner GID (`--gid`). Optional, defaults to the UID.
-	AnnotationGID = "csi.retyc.com/gid"
+	AnnotationGID = "csi.retycfs.com/gid"
 
 	// Mount options, read at stage (`retyc fs mount` flags). Without them the CLI defaults apply.
-	AnnotationCacheTTL         = "csi.retyc.com/cache-ttl"         // --cache-ttl, a Go duration
-	AnnotationBackgroundDelete = "csi.retyc.com/background-delete" // --background-delete, a boolean
-	AnnotationUnsafeWrite      = "csi.retyc.com/unsafe-write"      // --unsafe-write, a boolean
-	AnnotationReadOnly         = "csi.retyc.com/read-only"         // --read-only, a boolean
+	AnnotationCacheTTL         = "csi.retycfs.com/cache-ttl"         // --cache-ttl, a Go duration
+	AnnotationBackgroundDelete = "csi.retycfs.com/background-delete" // --background-delete, a boolean
+	AnnotationUnsafeWrite      = "csi.retycfs.com/unsafe-write"      // --unsafe-write, a boolean
+	AnnotationReadOnly         = "csi.retycfs.com/read-only"         // --read-only, a boolean
 	// AnnotationLocalFile replaces the patterns of files never sent (--local-file), separated by
 	// spaces; "none" sends every file.
-	AnnotationLocalFile = "csi.retyc.com/local-file"
+	AnnotationLocalFile = "csi.retycfs.com/local-file"
 
 	// Resources of the mount pod, over the node plugin's defaults (Kubernetes quantities).
-	AnnotationMountCPURequest    = "csi.retyc.com/mount-cpu-request"
-	AnnotationMountCPULimit      = "csi.retyc.com/mount-cpu-limit"
-	AnnotationMountMemoryRequest = "csi.retyc.com/mount-memory-request"
-	AnnotationMountMemoryLimit   = "csi.retyc.com/mount-memory-limit"
+	AnnotationMountCPURequest    = "csi.retycfs.com/mount-cpu-request"
+	AnnotationMountCPULimit      = "csi.retycfs.com/mount-cpu-limit"
+	AnnotationMountMemoryRequest = "csi.retycfs.com/mount-memory-request"
+	AnnotationMountMemoryLimit   = "csi.retycfs.com/mount-memory-limit"
 )
 
 // mountSettings are the per-volume settings of a mount pod, read from the claim's annotations.

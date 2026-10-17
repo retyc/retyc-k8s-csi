@@ -29,7 +29,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
 
-	"github.com/retyc/retyc-k8s-csi/internal/identity"
+	"github.com/retyc/retycfs-k8s-csi/internal/identity"
 )
 
 // FinalizerInUse keeps a mount pod object after its container stopped, until the node plugin has
@@ -52,7 +52,7 @@ const stuckAfter = time.Minute
 // Defaults applied by New to the zero fields of Config.
 const (
 	defaultKubeletDir        = "/var/lib/kubelet"
-	defaultSpoolRoot         = "/var/lib/retyc-csi/spool"
+	defaultSpoolRoot         = "/var/lib/retycfs-csi/spool"
 	defaultPriorityClass     = "system-node-critical"
 	defaultDrainTimeout      = 5 * time.Minute
 	defaultRestartBackoff    = 5 * time.Second
@@ -102,7 +102,7 @@ type Config struct {
 	// KubeletDir defaults to /var/lib/kubelet. The staging paths must be under <KubeletDir>/plugins,
 	// and the pods' target paths are under <KubeletDir>/pods.
 	KubeletDir string
-	// SpoolRoot defaults to /var/lib/retyc-csi/spool; each volume spools in <SpoolRoot>/<volume>.
+	// SpoolRoot defaults to /var/lib/retycfs-csi/spool; each volume spools in <SpoolRoot>/<volume>.
 	SpoolRoot string
 	// DrainTimeout is `--drain-timeout`, 5 min by default; the pods' grace period is 10 s more.
 	DrainTimeout time.Duration

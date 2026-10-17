@@ -57,10 +57,10 @@ jobs:
 
       # The Redis subchart (Chart.lock), pulled from Docker Hub's OCI registry.
       - name: Dependencies
-        run: helm dependency build charts/retyc-csi
+        run: helm dependency build charts/retycfs-csi
 
       - name: Lint (values schema included)
-        run: helm lint charts/retyc-csi
+        run: helm lint charts/retycfs-csi
 
       # The controller's embedded retyc-cli and the mount pods' image must be the same release.
       - name: retyc-cli version, Dockerfile vs chart
@@ -68,17 +68,17 @@ jobs:
 
       - name: Render in every credential and cache mode
         run: |
-          helm template x charts/retyc-csi --set credentials.token=t --set credentials.keyPassphrase=p > /tmp/managed.yaml
-          helm template x charts/retyc-csi --set credentials.existingSecret=s > /tmp/existing.yaml
-          helm template x charts/retyc-csi > /tmp/tenant-only.yaml
+          helm template x charts/retycfs-csi --set credentials.token=t --set credentials.keyPassphrase=p > /tmp/managed.yaml
+          helm template x charts/retycfs-csi --set credentials.existingSecret=s > /tmp/existing.yaml
+          helm template x charts/retycfs-csi > /tmp/tenant-only.yaml
           ! grep -q envFrom /tmp/tenant-only.yaml
-          helm template x charts/retyc-csi --set credentials.existingSecret=s --set controller.replicas=3 > /tmp/ha.yaml
-          helm template x charts/retyc-csi --set credentials.existingSecret=s \
+          helm template x charts/retycfs-csi --set credentials.existingSecret=s --set controller.replicas=3 > /tmp/ha.yaml
+          helm template x charts/retycfs-csi --set credentials.existingSecret=s \
             --set cache.store=redis --set cache.redis.subchart.enabled=true > /tmp/redis-subchart.yaml
-          helm template x charts/retyc-csi --set credentials.existingSecret=s \
+          helm template x charts/retycfs-csi --set credentials.existingSecret=s \
             --set cache.store=redis --set cache.redis.external.url=redis://default:p@redis:6379 > /tmp/redis-external.yaml
           # The Redis password never lands in the mount pods' ConfigMap.
-          ! helm template x charts/retyc-csi --set credentials.existingSecret=s --set cache.store=redis \
+          ! helm template x charts/retycfs-csi --set credentials.existingSecret=s --set cache.store=redis \
             --set cache.redis.external.url=redis://default:p@redis:6379 \
             --show-only templates/mount-config.yaml | grep -q 'redis://'
 
@@ -94,4 +94,4 @@ jobs:
           done
 
       - name: Package
-        run: helm package charts/retyc-csi -d dist
+        run: helm package charts/retycfs-csi -d dist

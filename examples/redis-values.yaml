@@ -30,4 +30,4 @@ redis:
 #   highConfidentiality: true
 #   redis:
 #     external:
-#       existingSecret: retyc-redis   # key RETYC_CACHE_REDIS_URL: redis://default:<password>@redis.example:6379
+#       existingSecret: retycfs-redis   # key RETYC_CACHE_REDIS_URL: redis://default:<password>@redis.example:6379

@@ -1,6 +1,6 @@
-MODULE       := github.com/retyc/retyc-k8s-csi
-BINARY       := retyc-k8s-csi
-IMAGE        ?= ghcr.io/retyc/retyc-k8s-csi:dev
+MODULE       := github.com/retyc/retycfs-k8s-csi
+BINARY       := retycfs-k8s-csi
+IMAGE        ?= ghcr.io/retyc/retycfs-k8s-csi:dev
 RETYC_CLI_IMAGE ?= ghcr.io/retyc/retyc-cli
 CLI_IMAGE    ?= retyc-cli:retycfs-v1.5.0-beta2
 CLI_SRC      ?= ../retyc_cli
@@ -11,7 +11,7 @@ CREATED      := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 EPOCH        := $(shell date -u +%s)
 LDFLAGS      := -s -w -X $(MODULE)/internal/driver.DriverVersion=$(VERSION)
 
-CHART        := charts/retyc-csi
+CHART        := charts/retycfs-csi
 
 .PHONY: build test vet lint vulncheck clean image cli-image helm-lint helm-template helm-package \
 	vm-up vm-retyc vm-load vm-load-cli vm-secret vm-helm vm-restart vm-ssh vm-destroy
@@ -71,7 +71,7 @@ helm-lint:
 
 ## Render the chart with default values to stdout.
 helm-template:
-	helm template retyc-csi $(CHART) -n kube-system
+	helm template retycfs-csi $(CHART) -n kube-system
 
 ## Package the chart into dist/.
 helm-package:
@@ -107,7 +107,7 @@ vm-load-cli:
 vm-secret:
 	@test -n "$$RETYC_TOKEN" && test -n "$$RETYC_KEY_PASSPHRASE" || { echo "export RETYC_TOKEN and RETYC_KEY_PASSPHRASE first (see doc/testing.md)"; exit 1; }
 	@printf 'RETYC_TOKEN=%s\nRETYC_KEY_PASSPHRASE=%s\n' "$$RETYC_TOKEN" "$$RETYC_KEY_PASSPHRASE" | \
-	  vagrant ssh -c "kubectl -n kube-system create secret generic retyc-csi-credentials --from-env-file=/dev/stdin --dry-run=client -o yaml | kubectl apply -f -"
+	  vagrant ssh -c "kubectl -n kube-system create secret generic retycfs-csi-credentials --from-env-file=/dev/stdin --dry-run=client -o yaml | kubectl apply -f -"
 
 ## Install or upgrade the chart in the VM with examples/vagrant-values.yaml: the :dev image, the
 ## Secret created by vm-secret, traces to the provisioned Jaeger (Helm is provisioned with the VM).
@@ -115,12 +115,12 @@ vm-secret:
 VM_VALUES ?= examples/vagrant-values.yaml
 vm-helm:
 	vagrant rsync
-	vagrant ssh -c "helm upgrade --install retyc-csi /vagrant/$(CHART) -n kube-system -f /vagrant/$(VM_VALUES) --wait --timeout 5m"
+	vagrant ssh -c "helm upgrade --install retycfs-csi /vagrant/$(CHART) -n kube-system -f /vagrant/$(VM_VALUES) --wait --timeout 5m"
 
 ## Restart controller + node plugin so they pick up a freshly loaded :dev image (IfNotPresent +
 ## unchanged tag = no rollout on its own), and wait for both. Typical loop: make image vm-load vm-restart
 vm-restart:
-	vagrant ssh -c "kubectl -n kube-system rollout restart deploy/retyc-csi-controller ds/retyc-csi-node && kubectl -n kube-system rollout status deploy/retyc-csi-controller --timeout=180s && kubectl -n kube-system rollout status ds/retyc-csi-node --timeout=180s"
+	vagrant ssh -c "kubectl -n kube-system rollout restart deploy/retycfs-csi-controller ds/retycfs-csi-node && kubectl -n kube-system rollout status deploy/retycfs-csi-controller --timeout=180s && kubectl -n kube-system rollout status ds/retycfs-csi-node --timeout=180s"
 
 ## Shell into the VM.
 vm-ssh:

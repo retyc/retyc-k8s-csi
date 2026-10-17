@@ -14,7 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	k8stesting "k8s.io/client-go/testing"
 
-	"github.com/retyc/retyc-k8s-csi/internal/identity"
+	"github.com/retyc/retycfs-k8s-csi/internal/identity"
 )
 
 // addPV creates a PV of the driver for testVolume in class, with or without a node-stage secret
@@ -26,7 +26,7 @@ func (e *nodeEnv) addPV(class string, tenant, secretRef bool) {
 		sc := &storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: class}, Provisioner: DriverName}
 		if tenant {
 			sc.Parameters = map[string]string{ //nolint:gosec // G101: parameter names
-				nodeStageSecretParam:                             "retyc-credentials",
+				nodeStageSecretParam:                             "retycfs-credentials",
 				"csi.storage.k8s.io/node-stage-secret-namespace": "${pvc.namespace}",
 			}
 		}
@@ -44,7 +44,7 @@ func (e *nodeEnv) addPV(class string, tenant, secretRef bool) {
 		},
 	}
 	if secretRef {
-		pv.Spec.CSI.NodeStageSecretRef = &corev1.SecretReference{Name: "retyc-credentials", Namespace: "team"}
+		pv.Spec.CSI.NodeStageSecretRef = &corev1.SecretReference{Name: "retycfs-credentials", Namespace: "team"}
 	}
 	if _, err := e.kube.CoreV1().PersistentVolumes().Create(ctx, pv, metav1.CreateOptions{}); err != nil {
 		e.t.Fatal(err)
@@ -62,13 +62,13 @@ func TestStageDefaultIdentityTenantCheck(t *testing.T) {
 		want              codes.Code
 		message           string
 	}{
-		{"tenant class, no secret ref", "retyc-tenant", true, false, false, codes.FailedPrecondition,
-			"StorageClass retyc-tenant is a tenant class"},
-		{"tenant class, found from the claim", "retyc-tenant", true, false, true, codes.FailedPrecondition,
+		{"tenant class, no secret ref", "retycfs-tenant", true, false, false, codes.FailedPrecondition,
+			"StorageClass retycfs-tenant is a tenant class"},
+		{"tenant class, found from the claim", "retycfs-tenant", true, false, true, codes.FailedPrecondition,
 			"tenant class"},
-		{"secret ref, no secrets", "retyc-rwx", false, true, false, codes.FailedPrecondition,
-			"names node-stage secret team/retyc-credentials"},
-		{"global class", "retyc-rwx", false, false, false, codes.Aborted, ""},
+		{"secret ref, no secrets", "retycfs-rwx", false, true, false, codes.FailedPrecondition,
+			"names node-stage secret team/retycfs-credentials"},
+		{"global class", "retycfs-rwx", false, false, false, codes.Aborted, ""},
 		{"no class", "", false, false, false, codes.Aborted, ""},
 		{"class deleted", "", false, false, true, codes.Aborted, ""},
 	} {
@@ -140,7 +140,7 @@ func TestStageDefaultIdentityAllPVs(t *testing.T) {
 	}
 
 	e = newNodeEnv(t)
-	e.addPV("retyc-tenant", true, false)
+	e.addPV("retycfs-tenant", true, false)
 	global := &corev1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{Name: "a-global"},
 		Spec: corev1.PersistentVolumeSpec{PersistentVolumeSource: corev1.PersistentVolumeSource{

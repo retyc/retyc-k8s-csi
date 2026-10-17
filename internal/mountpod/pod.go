@@ -16,7 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/validation"
 
-	"github.com/retyc/retyc-k8s-csi/internal/identity"
+	"github.com/retyc/retycfs-k8s-csi/internal/identity"
 )
 
 // Labels and annotations of the mount pods and their Secrets. A label value is the exact value when
@@ -45,10 +45,10 @@ const (
 	// which SpecOf rebuilds the Spec of a pod to recreate without the claim at hand.
 	AnnotationSpec = driverName + "/spec"
 
-	appName         = "retyc-mount"
-	managedBy       = "retyc-k8s-csi"
-	namePrefix      = "retyc-mount-"
-	driverName      = "csi.retyc.com"
+	appName         = "retycfs-mount"
+	managedBy       = "retycfs-k8s-csi"
+	namePrefix      = "retycfs-mount-"
+	driverName      = "csi.retycfs.com"
 	containerName   = "mount"
 	metricsPortName = "metrics"
 )

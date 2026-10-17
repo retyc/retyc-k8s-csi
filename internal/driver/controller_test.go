@@ -15,7 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
-	"github.com/retyc/retyc-k8s-csi/internal/retycclient"
+	"github.com/retyc/retycfs-k8s-csi/internal/retycclient"
 )
 
 // fakeRetyc is a shell stand-in for the retyc CLI. Each command (ls, quota, create, set, rm) prints

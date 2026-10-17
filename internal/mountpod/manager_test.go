@@ -22,14 +22,14 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
-	"github.com/retyc/retyc-k8s-csi/internal/identity"
+	"github.com/retyc/retycfs-k8s-csi/internal/identity"
 )
 
-const testNS = "retyc-csi"
+const testNS = "retycfs-csi"
 
 var podsGVR = corev1.SchemeGroupVersion.WithResource("pods")
 
-const testStaging = "/var/lib/kubelet/plugins/kubernetes.io/csi/csi.retyc.com/abc/globalmount"
+const testStaging = "/var/lib/kubelet/plugins/kubernetes.io/csi/csi.retycfs.com/abc/globalmount"
 
 // env is a Manager on a fake API server that assigns UIDs and, like the real one, only marks a
 // pod with finalizers as deleted, at now + its grace period.
@@ -174,7 +174,7 @@ func TestNameAndLabels(t *testing.T) {
 	if a, b := Name("n", "v"), Name("n", "v"); a != b || a == Name("n", "w") || Name("n1", "v") == Name("n", "1v") {
 		t.Fatal("names must be stable and distinct")
 	}
-	if got := Name("node-a", "dr-1"); !strings.HasPrefix(got, "retyc-mount-") || len(got) != 28 {
+	if got := Name("node-a", "dr-1"); !strings.HasPrefix(got, "retycfs-mount-") || len(got) != 30 {
 		t.Fatalf("Name = %q", got)
 	}
 	for _, v := range []string{"", "node-a", strings.Repeat("n.", 100) + "x", "_a b/c-", strings.Repeat("-", 70)} {
@@ -292,8 +292,9 @@ func TestEnsureCreatesPodAndSecret(t *testing.T) {
 		}
 	}
 	want := map[string]string{
-		"staging": "/var/lib/kubelet/plugins/kubernetes.io/csi/csi.retyc.com/abc", "spool": "/var/lib/retyc-csi/spool/dr-1",
-		"fuse": "/dev/fuse",
+		"staging": "/var/lib/kubelet/plugins/kubernetes.io/csi/csi.retycfs.com/abc",
+		"spool":   "/var/lib/retycfs-csi/spool/dr-1",
+		"fuse":    "/dev/fuse",
 	}
 	if fmt.Sprint(hostPaths) != fmt.Sprint(want) {
 		t.Errorf("hostPaths = %v, want %v", hostPaths, want)
