@@ -1,0 +1,11 @@
+# Artifact Hub repository metadata: https://artifacthub.io/docs/topics/repositories/
+# For an OCI repository, Artifact Hub reads this file from the "artifacthub.io" tag of the chart's
+# OCI repository (ghcr.io/retyc/charts/retycfs-csi:artifacthub.io), pushed by .github/workflows/chart.yml.
+
+# Repository ID shown in the Artifact Hub control panel (a UUID), for the Verified Publisher badge.
+repositoryID: eccdbdb5-e110-43f4-8ef0-e583b009e8ba
+
+# Artifact Hub users allowed to claim ownership of the repository.
+# owners:
+#   - name: Retyc
+#     email: contact@example.com
