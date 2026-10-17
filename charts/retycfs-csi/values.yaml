@@ -306,7 +306,7 @@ node:
 mount:
   image:
     repository: ghcr.io/retyc/retyc-cli
-    tag: v1.5.0-beta2
+    tag: v1.5.0
     pullPolicy: IfNotPresent
   # -- Pull secrets of the retyc-cli image, in the release namespace.
   imagePullSecrets: []
