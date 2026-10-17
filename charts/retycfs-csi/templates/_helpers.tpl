@@ -119,7 +119,9 @@ replica, or the flag set by hand in either sidecar's extraArgs.
 
 {{/*
 Secret and key holding RETYC_CACHE_REDIS_URL for the node plugin, as "name/key", or "" with the
-memory cache. Fails on cache.store: redis without a Redis.
+memory cache. Fails on cache.store: redis without a Redis, and on the subchart with another store:
+it would keep running unused, its password Secret gone (redis-secret.yaml), and a later return to
+redis would generate a new password the running Redis does not know.
 */}}
 {{- define "retycfs-csi.redisURLSecret" -}}
 {{- $c := .Values.cache }}
@@ -139,6 +141,8 @@ memory cache. Fails on cache.store: redis without a Redis.
 {{- else }}
 {{- fail "cache.store is redis: enable cache.redis.subchart or set cache.redis.external.url or existingSecret" }}
 {{- end }}
+{{- else if $c.redis.subchart.enabled }}
+{{- fail (printf "cache.redis.subchart.enabled needs cache.store: redis (now %q): disable the subchart with the memory cache" $c.store) }}
 {{- end }}
 {{- end }}
 

@@ -1,0 +1,20 @@
+# The published chart in the test VMs (CLUSTER_CHART=prod in .env.local): released images, the
+# production API, and the Secret created by `make vm-secret`.
+credentials:
+  existingSecret: 'retycfs-csi-credentials'
+
+# The retyc CLI exports its traces over OTLP as soon as an endpoint is set: to the Jaeger the
+# Vagrantfile provisions (UI on http://localhost:18081).
+controller:
+  extraEnv:
+    - name: OTEL_EXPORTER_OTLP_ENDPOINT
+      value: 'http://jaeger.jaeger.svc.cluster.local:4318'
+    - name: OTEL_SERVICE_NAME
+      value: 'retycfs-csi-controller'
+
+mount:
+  extraEnv:
+    - name: OTEL_EXPORTER_OTLP_ENDPOINT
+      value: 'http://jaeger.jaeger.svc.cluster.local:4318'
+    - name: OTEL_SERVICE_NAME
+      value: 'retycfs-mount'

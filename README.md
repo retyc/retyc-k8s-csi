@@ -53,7 +53,7 @@ $ kubectl -n kube-system get pods -l app.kubernetes.io/instance=retycfs-csi
 Deploy the test resources, a claim with a writer pod and a reader pod:
 
 ```console
-$ kubectl create -f https://raw.githubusercontent.com/retyc/retycfs-k8s-csi/master/examples/rwx-test.yaml
+$ kubectl create -f https://raw.githubusercontent.com/retyc/retycfs-k8s-csi/master/examples/charts/rwx-test.yaml
 $ kubectl logs -f retycfs-reader
 ```
 
@@ -67,7 +67,7 @@ $ kubectl -n kube-system get pods -l app.kubernetes.io/name=retycfs-mount
 Delete the test resources:
 
 ```console
-$ kubectl delete -f https://raw.githubusercontent.com/retyc/retycfs-k8s-csi/master/examples/rwx-test.yaml
+$ kubectl delete -f https://raw.githubusercontent.com/retyc/retycfs-k8s-csi/master/examples/charts/rwx-test.yaml
 ```
 
 The dataroom is gone as well.
@@ -123,7 +123,7 @@ databases.
 $ make build test lint     # driver
 $ make helm-lint           # chart
 $ make image               # container image
-$ make vm-up               # single-node k3s in a Vagrant VM, then: make image vm-load vm-secret vm-helm
+$ vagrant up               # k3s in Vagrant VMs (.env: dev/prod chart, multi/single node), then: make image-dev vm-load vm-secret vm-helm
 ```
 
 ## License

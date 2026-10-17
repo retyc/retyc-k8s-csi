@@ -1,8 +1,15 @@
-# PrivateBin (https://github.com/PrivateBin/docker-nginx-fpm-alpine), two replicas sharing one RWX
-# claim. Its Filesystem storage keeps one small file per paste plus a server salt and the traffic
-# limiter state under /srv/data, no database: a paste created through one replica is readable
-# through the other. Apply and browse the ingress controller's address (k3s ships Traefik): the
-# rule has no host, so it catches every request.
+# PrivateBin (https://github.com/PrivateBin/docker-nginx-fpm-alpine) on every node, all sharing one
+# RWX claim. Its Filesystem storage keeps one small file per paste plus a server salt and the traffic
+# limiter state under /srv/data, no database. The Service spreads requests over every node with no
+# session affinity: a paste created through one node is read through another.
+#
+# Each node mounts the claim with its own mount pod. Install the chart with the shared Redis cache
+# (examples/charts/redis-values.yaml), so that every mount pod sees the others' pastes at once; with the
+# default memory cache, each mount pod keeps its own listings, and another node's paste may not be
+# found for up to the cache TTL (1 min by default, csi.retycfs.com/cache-ttl).
+#
+# Apply and browse the ingress controller's address (k3s ships Traefik): the rule has no host, so
+# it catches every request.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -53,22 +60,6 @@ data:
     batchsize = 10
     ;*/
 ---
-# Headless service governing the StatefulSet's pod identities.
-apiVersion: v1
-kind: Service
-metadata:
-  name: privatebin-headless
-  namespace: privatebin
-  labels:
-    app: privatebin
-spec:
-  clusterIP: None
-  ports:
-    - port: 8080
-      name: http
-  selector:
-    app: privatebin
----
 apiVersion: v1
 kind: Service
 metadata:
@@ -84,18 +75,15 @@ spec:
   selector:
     app: privatebin
 ---
+# One pod per node: as many mount pods of the claim as nodes.
 apiVersion: apps/v1
-kind: StatefulSet
+kind: DaemonSet
 metadata:
   name: privatebin
   namespace: privatebin
   labels:
     app: privatebin
 spec:
-  serviceName: privatebin-headless
-  replicas: 2
-  # Replicas are interchangeable, no need to start them one after the other.
-  podManagementPolicy: Parallel
   selector:
     matchLabels:
       app: privatebin
@@ -140,7 +128,6 @@ spec:
             - name: config
               mountPath: /srv/cfg
               readOnly: true
-      # Every replica mounts the same claim: no volumeClaimTemplates on purpose.
       volumes:
         - name: data
           persistentVolumeClaim:

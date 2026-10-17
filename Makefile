@@ -2,9 +2,9 @@ MODULE       := github.com/retyc/retycfs-k8s-csi
 BINARY       := retycfs-k8s-csi
 IMAGE        ?= ghcr.io/retyc/retycfs-k8s-csi:dev
 RETYC_CLI_IMAGE ?= ghcr.io/retyc/retyc-cli
-CLI_IMAGE    ?= retyc-cli:retycfs-v1.5.0-beta2
-CLI_SRC      ?= ../retyc_cli
-CLI_VERSION  ?= v1.5.0-beta2
+# Development build of retyc-cli (no `prod` tag: honours RETYC_INSECURE), published from its master.
+CLI_DEV_IMAGE ?= ghcr.io/retyc/retyc-cli-dev
+CLI_DEV_TAG  ?= master
 VERSION      ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 REVISION     := $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
 CREATED      := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -13,8 +13,8 @@ LDFLAGS      := -s -w -X $(MODULE)/internal/driver.DriverVersion=$(VERSION)
 
 CHART        := charts/retycfs-csi
 
-.PHONY: build test vet lint vulncheck clean image cli-image helm-lint helm-template helm-package \
-	vm-up vm-retyc vm-load vm-load-cli vm-secret vm-helm vm-restart vm-ssh vm-destroy
+.PHONY: build test vet lint vulncheck clean image image-dev helm-lint helm-template helm-package \
+	vm-load vm-secret vm-helm vm-restart
 
 ## Build the driver binary (both controller and node modes)
 build:
@@ -41,23 +41,20 @@ clean:
 ## Build the container image (controller + node share one image, see main.go --mode), with OCI
 ## provenance labels from git. The embedded retyc-cli version is pinned in the Dockerfile;
 ## `make image RETYC_CLI_VERSION=commit-xxxxxxx` overrides it for a one-off build, `RETYC_CLI_IMAGE`
-## the CLI image repository, `VERSION=v1.0.0` the image version.
+## the CLI image repository, `VERSION=v1.0.0` the image version. With RETYC_CLI_VERSION, `--pull`
+## fetches that CLI tag again: a moving one (master) would otherwise stay at its local copy.
 image:
 	docker build \
-	  $(if $(RETYC_CLI_VERSION),--no-cache --build-arg RETYC_CLI_VERSION=$(RETYC_CLI_VERSION) --build-arg SOURCE_DATE_EPOCH=0) \
+	  $(if $(RETYC_CLI_VERSION),--no-cache --pull --build-arg RETYC_CLI_VERSION=$(RETYC_CLI_VERSION) --build-arg SOURCE_DATE_EPOCH=0) \
 	  --build-arg RETYC_CLI_IMAGE=$(RETYC_CLI_IMAGE) \
 	  --build-arg VERSION=$(VERSION) --build-arg REVISION=$(REVISION) --build-arg CREATED=$(CREATED) \
 	  -t $(IMAGE) .
 
-## Build the development retyc-cli image of the mount pods (CLI_IMAGE, as examples/vagrant-values.yaml
-## expects) from the tag CLI_VERSION of a retyc-cli checkout (CLI_SRC). The API refuses a CLI without a
-## version (426), hence VERSION; retyc-cli's Dockerfile builds with `-tags prod`, which ignores
-## RETYC_INSECURE: the build uses a copy without it, in an export of the tag (the checkout is untouched).
-cli-image:
-	@src=$$(mktemp -d) && git -C $(CLI_SRC) archive $(CLI_VERSION) | tar -x -C $$src && \
-	sed '/-tags prod/d' $$src/Dockerfile > $$src/Dockerfile.dev && \
-	docker build -f $$src/Dockerfile.dev --build-arg VERSION=$(CLI_VERSION) -t $(CLI_IMAGE) $$src; \
-	rc=$$?; rm -rf $$src; exit $$rc
+## The image against the development CLI (CLI_DEV_IMAGE:CLI_DEV_TAG), for the test VMs and the dev
+## API: the controller embeds its binary, as the mount pods of examples/helm-values/dev-vagrant-values.yaml
+## run it.
+image-dev:
+	$(MAKE) image RETYC_CLI_IMAGE=$(CLI_DEV_IMAGE) RETYC_CLI_VERSION=$(CLI_DEV_TAG)
 
 ## Lint the Helm chart (values schema included), check that it runs the Dockerfile's retyc-cli, and
 ## render it in its three credential modes.
@@ -78,54 +75,60 @@ helm-package:
 	helm package $(CHART) -d dist
 
 ## ---------------------------------------------------------------------------------------------
-## Test VM: single-node k3s on Debian trixie under Vagrant + libvirt (Vagrantfile, doc/testing.md).
-## Nothing in this Makefile talks to a cluster from the host: every vm-* target goes through
-## `vagrant ssh -c`, a login shell in the VM where kubectl and helm work without sudo.
+## What runs in the test cluster. The VMs themselves are Vagrant's (Vagrantfile, doc/testing.md:
+## vagrant up / halt / destroy / ssh server). Nothing in this Makefile talks to the cluster from
+## the host: every vm-* target goes through `vagrant ssh server -c`, a login shell in the server
+## where kubectl and helm work without sudo.
+##
+## The cluster's settings, shared with the Vagrantfile: .env, then .env.local over it (not
+## versioned); `make vm-helm CLUSTER_CHART=prod` overrides both for one run, the shell environment
+## never does. Read line by line rather than included: make would expand a `$` of the credentials.
+##   CLUSTER_CHART  dev (this repo's chart, the image of make image-dev) or prod (the published chart)
+##   CLUSTER_MODE   multi (server + agent, Redis cache) or single (server alone, memory cache)
+VM_ENV_FILES := .env $(wildcard .env.local)
+vm_env = $(shell sed -n 's/^$(1)=//p' $(VM_ENV_FILES) | tail -n 1)
+CLUSTER_CHART := $(call vm_env,CLUSTER_CHART)
+CLUSTER_MODE := $(call vm_env,CLUSTER_MODE)
 
-## Boot + provision the VM (first run: box download + k3s install, a few minutes), then ship the
-## host's `retyc` CLI into it.
-vm-up:
-	vagrant up --provider=libvirt
-	$(MAKE) vm-retyc
+VM_NODES := server $(if $(filter multi,$(CLUSTER_MODE)),agent)
+VM_CHART_REPO ?= https://retyc.github.io/retycfs-k8s-csi
+VM_VALUES ?= examples/helm-values/$(CLUSTER_CHART)-vagrant-values.yaml $(if $(filter multi,$(CLUSTER_MODE)),examples/charts/redis-values.yaml)
+VM_CHECK = @case "$(CLUSTER_CHART)/$(CLUSTER_MODE)" in dev/multi|dev/single|prod/multi|prod/single) ;; \
+	*) echo "CLUSTER_CHART must be dev or prod and CLUSTER_MODE multi or single (.env, .env.local), not '$(CLUSTER_CHART)' and '$(CLUSTER_MODE)'"; exit 1 ;; esac
 
-## Copy the host's `retyc` binary into the VM (stages 1 and 3 run it there). RETYC_BIN overrides.
-RETYC_BIN ?= $(shell command -v retyc)
-vm-retyc:
-	@test -n "$(RETYC_BIN)" || { echo "retyc not found in PATH; set RETYC_BIN=/path/to/retyc"; exit 1; }
-	vagrant ssh -c "sudo tee /usr/local/bin/retyc >/dev/null && sudo chmod 0755 /usr/local/bin/retyc" < $(RETYC_BIN)
-
-## Import the locally built image straight into k3s' containerd (no registry involved).
+## Import the locally built image straight into each node's containerd (no registry involved).
 vm-load:
-	docker save $(IMAGE) | vagrant ssh -c "sudo k3s ctr images import -"
+	$(VM_CHECK)
+	@for m in $(VM_NODES); do echo "$(IMAGE) -> $$m"; docker save $(IMAGE) | vagrant ssh $$m -c "sudo k3s ctr images import -" || exit 1; done
 
-## Import the retyc-cli image (used by the mount pods) into k3s' containerd. CLI_IMAGE overrides it.
-vm-load-cli:
-	docker save $(CLI_IMAGE) | vagrant ssh -c "sudo k3s ctr images import -"
-
-## Create/refresh the credentials Secret from RETYC_TOKEN / RETYC_KEY_PASSPHRASE in the host
-## environment. Values travel over stdin, never on a command line.
+## Create/refresh the credentials Secret from RETYC_TOKEN and RETYC_KEY_PASSPHRASE of .env.local (a
+## dev account with CLUSTER_CHART=dev, a production one with prod), not from the shell environment.
+## Values travel in a shell variable and over stdin, never on a command line.
 vm-secret:
-	@test -n "$$RETYC_TOKEN" && test -n "$$RETYC_KEY_PASSPHRASE" || { echo "export RETYC_TOKEN and RETYC_KEY_PASSPHRASE first (see doc/testing.md)"; exit 1; }
-	@printf 'RETYC_TOKEN=%s\nRETYC_KEY_PASSPHRASE=%s\n' "$$RETYC_TOKEN" "$$RETYC_KEY_PASSPHRASE" | \
-	  vagrant ssh -c "kubectl -n kube-system create secret generic retycfs-csi-credentials --from-env-file=/dev/stdin --dry-run=client -o yaml | kubectl apply -f -"
+	@creds=$$(awk '/^RETYC_(TOKEN|KEY_PASSPHRASE)=./ { v[substr($$0, 1, index($$0, "=") - 1)] = $$0 } \
+	  END { if (!("RETYC_TOKEN" in v) || !("RETYC_KEY_PASSPHRASE" in v)) exit 1; print v["RETYC_TOKEN"]; print v["RETYC_KEY_PASSPHRASE"] }' $(VM_ENV_FILES)) || \
+	  { echo "set RETYC_TOKEN and RETYC_KEY_PASSPHRASE in .env.local (see doc/testing.md)"; exit 1; }; \
+	printf '%s\n' "$$creds" | \
+	  vagrant ssh server -c "kubectl -n kube-system create secret generic retycfs-csi-credentials --from-env-file=/dev/stdin --dry-run=client -o yaml | kubectl apply -f -"
 
-## Install or upgrade the chart in the VM with examples/vagrant-values.yaml: the :dev image, the
-## Secret created by vm-secret, traces to the provisioned Jaeger (Helm is provisioned with the VM).
-## Typical loop: make image vm-load vm-helm vm-restart
-VM_VALUES ?= examples/vagrant-values.yaml
+## Install or upgrade the chart as CLUSTER_CHART and CLUSTER_MODE say, with VM_VALUES:
+## examples/helm-values/<dev|prod>-vagrant-values.yaml, plus examples/charts/redis-values.yaml in
+## multi mode. dev installs this repo's chart (its Redis subchart fetched first if missing), prod
+## the latest published one. Without --reuse-values: what a scenario --set is dropped.
+## Typical loop: make image-dev vm-load vm-helm vm-restart
 vm-helm:
-	vagrant rsync
-	vagrant ssh -c "helm upgrade --install retycfs-csi /vagrant/$(CHART) -n kube-system -f /vagrant/$(VM_VALUES) --wait --timeout 5m"
+	$(VM_CHECK)
+ifneq ($(CLUSTER_CHART),prod)
+	@ls $(CHART)/charts/redis-*.tgz >/dev/null 2>&1 || helm dependency build $(CHART)
+endif
+	vagrant rsync server
+ifeq ($(CLUSTER_CHART),prod)
+	vagrant ssh server -c "helm repo add retycfs $(VM_CHART_REPO) --force-update >/dev/null && helm upgrade --install retycfs-csi retycfs/retycfs-csi -n kube-system $(VM_VALUES:%=-f /vagrant/%) --wait --timeout 5m"
+else
+	vagrant ssh server -c "helm upgrade --install retycfs-csi /vagrant/$(CHART) -n kube-system $(VM_VALUES:%=-f /vagrant/%) --wait --timeout 5m"
+endif
 
 ## Restart controller + node plugin so they pick up a freshly loaded :dev image (IfNotPresent +
-## unchanged tag = no rollout on its own), and wait for both. Typical loop: make image vm-load vm-restart
+## unchanged tag = no rollout on its own), and wait for both. Typical loop: make image-dev vm-load vm-restart
 vm-restart:
-	vagrant ssh -c "kubectl -n kube-system rollout restart deploy/retycfs-csi-controller ds/retycfs-csi-node && kubectl -n kube-system rollout status deploy/retycfs-csi-controller --timeout=180s && kubectl -n kube-system rollout status ds/retycfs-csi-node --timeout=180s"
-
-## Shell into the VM.
-vm-ssh:
-	vagrant ssh
-
-## Destroy the VM (the downloaded box stays in ~/.vagrant.d/boxes).
-vm-destroy:
-	vagrant destroy -f
+	vagrant ssh server -c "kubectl -n kube-system rollout restart deploy/retycfs-csi-controller ds/retycfs-csi-node && kubectl -n kube-system rollout status deploy/retycfs-csi-controller --timeout=180s && kubectl -n kube-system rollout status ds/retycfs-csi-node --timeout=180s"

@@ -88,7 +88,7 @@ StatefulSet's pods stay `Pending` and its events repeat the refusal.
 | `mount.spoolDir` | `/var/lib/retycfs-csi/spool` | Host directory of the spools, one per volume |
 | `cache.store` | `memory` | Listing cache of the mount pods: `memory` (one per pod) or `redis` (shared) |
 | `cache.highConfidentiality` | `false` | Keep only ciphertexts in Redis; set it when several tenants share the Redis |
-| `cache.redis.subchart.enabled` | `false` | Deploy the CloudPirates Redis chart (standalone, no persistence, `allkeys-lru`; values under `redis`) |
+| `cache.redis.subchart.enabled` | `false` | Deploy the CloudPirates Redis chart (standalone, no persistence, `allkeys-lru`; values under `redis`). Only with `cache.store: redis` |
 | `cache.redis.subchart.password` | `""` | Redis password; empty generates one and keeps it across upgrades (not in GitOps: see below) |
 | `cache.redis.subchart.existingSecret` | `""` | Your own Secret instead, keys `redis-password` and `RETYC_CACHE_REDIS_URL`; set `redis.auth.existingSecret` to the same name |
 | `cache.redis.external.url` | `""` | URL of your own Redis (7.4+, standalone), stored in a Secret by the chart |
