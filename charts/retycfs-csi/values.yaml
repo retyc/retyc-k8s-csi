@@ -349,7 +349,8 @@ cache:
   redis:
     subchart:
       # -- Deploy the CloudPirates Redis chart with the release (standalone, no persistence,
-      # password, maxmemory with allkeys-lru: see `redis`).
+      # password, maxmemory with allkeys-lru: see `redis`). Only with `store: redis`: going back
+      # to `memory` takes `enabled: false` too, which removes the Redis.
       enabled: false
       # -- Redis password (letters, digits and `-._~` only: it goes into a URL). Empty generates one
       # at install and keeps it across upgrades, with Helm's `lookup`. In GitOps (Argo CD, `helm

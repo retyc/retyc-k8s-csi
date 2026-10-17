@@ -23,12 +23,13 @@ controller:
     - ip: '192.168.121.1'
       hostnames: ['api.triplesfer.traefik.me', 'auth.triplesfer.traefik.me']
 
-# The CLI image is built locally and imported into k3s (`make vm-load-cli`).
+# The development CLI (no `prod` tag), from retyc-cli's master: pulled again by every mount pod,
+# the tag moves. `make image-dev` embeds the same in the controller.
 mount:
   image:
-    repository: retyc-cli
-    tag: retycfs-v1.5.0-beta2
-    pullPolicy: IfNotPresent
+    repository: ghcr.io/retyc/retyc-cli-dev
+    tag: master
+    pullPolicy: Always
   extraEnv:
     - name: RETYC_API_BASE_URL
       value: 'https://api.triplesfer.traefik.me'

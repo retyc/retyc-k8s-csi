@@ -3,7 +3,7 @@
 # one-off build. It must match the mount pods' image in the chart's values.yaml.
 ARG RETYC_CLI_VERSION=v1.5.0-beta2
 # Registry/repository of the retyc-cli image; `make image RETYC_CLI_IMAGE=...` overrides it (e.g.
-# a locally built CLI image).
+# the development CLI, ghcr.io/retyc/retyc-cli-dev: make image-dev).
 ARG RETYC_CLI_IMAGE=ghcr.io/retyc/retyc-cli
 # Build provenance, set by `make image` (git describe / rev-parse / date -u); also reported by the
 # driver's GetPluginInfo through ldflags.

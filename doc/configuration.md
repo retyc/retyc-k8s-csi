@@ -94,7 +94,7 @@ The mount settings of a static PV are read from its `volumeAttributes`, with the
 (`csi.retycfs.com/uid` is required there too). Add `pvcName` and `pvcNamespace` to have the claim's annotations read as
 well: they then win over `volumeAttributes`. Without them, only `volumeAttributes` count. The chart's admission policy
 requires `csi.retycfs.com/uid` on the claim of a static PV on its classes, so put it on both. Fill in and apply
-[`examples/static-pv.yaml`](../examples/static-pv.yaml), with `persistentVolumeReclaimPolicy: Retain`: the provisioner
+[`examples/charts/static-pv.yaml`](../examples/charts/static-pv.yaml), with `persistentVolumeReclaimPolicy: Retain`: the provisioner
 never deletes volumes it did not create.
 
 **A static PV of a tenant class needs its own `nodeStageSecretRef`.** kubelet takes the node-stage secret from the PV,
@@ -140,7 +140,7 @@ kubectl patch pvc shared-docs -p '{"spec":{"volumeAttributesClassName":"retycfs-
 
 **Disabling versioning is destructive**: the driver confirms it without asking, and the next completed upload of each
 file deletes its older versions. For a tenant class, the resizer authenticates with the controller-expand secret. See
-[`examples/volume-attributes-class.yaml`](../examples/volume-attributes-class.yaml).
+[`examples/charts/volume-attributes-class.yaml`](../examples/charts/volume-attributes-class.yaml).
 
 ## StorageClasses
 
@@ -195,7 +195,7 @@ What to know before rolling it out:
 - a tenant's new credentials apply to its mount pods at the next mount of each volume (another config hash);
 - with a shared Redis, set `cache.highConfidentiality: true` (NOTES warns otherwise).
 
-Example, with a namespace, its Secret, a claim and two pods: [`examples/tenant.yaml`](../examples/tenant.yaml).
+Example, with a namespace, its Secret, a claim and two pods: [`examples/charts/tenant.yaml`](../examples/charts/tenant.yaml).
 
 ## Chart values
 
@@ -244,7 +244,7 @@ at start; a change rolls the node plugin, cuts no mount, and applies to the moun
 |-------|---------|-------------|
 | `cache.store` | `memory` | `memory`: one cache per mount pod; `redis`: one Redis shared by every mount pod of the cluster |
 | `cache.highConfidentiality` | `false` | `--cache-redis-high-confidentiality`: Redis holds only ciphertexts (about 19 MB per 10,000 files instead of 2.3 MB, plus a decryption per name on each pod). Set it with several tenants on one Redis |
-| `cache.redis.subchart.enabled` | `false` | deploy the CloudPirates Redis chart (standalone, no persistence, `maxmemory` with `allkeys-lru`, values under `redis`) |
+| `cache.redis.subchart.enabled` | `false` | deploy the CloudPirates Redis chart (standalone, no persistence, `maxmemory` with `allkeys-lru`, values under `redis`); only with `cache.store: redis` |
 | `cache.redis.subchart.password` | `""` | Redis password (letters, digits, `-._~`); empty generates one at install and keeps it across upgrades |
 | `cache.redis.subchart.existingSecret` | `""` | a Secret you manage instead, with the keys `redis-password` (the password) and `RETYC_CACHE_REDIS_URL` (`redis://:<password>@<release>-redis:6379`); the chart then creates no Redis Secret |
 | `cache.redis.external.url` / `existingSecret` / `existingSecretKey` | | your own Redis (7.4 or later, standalone, `rediss://` for TLS), as a URL the chart stores in a Secret, or an existing Secret |
@@ -256,7 +256,7 @@ it into each mount pod's own Secret.
 `cache.redis.subchart.existingSecret`.** The generated password is kept across upgrades with Helm's `lookup`, which
 returns nothing outside `helm install`/`upgrade`: each render would then produce a new password and change the Redis
 Secret, while the Redis StatefulSet keeps the former one. The mount pods would then fail to authenticate, and get
-another config than the running ones. See [`examples/redis-values.yaml`](../examples/redis-values.yaml).
+another config than the running ones. See [`examples/charts/redis-values.yaml`](../examples/charts/redis-values.yaml).
 
 ### Admission policy
 
@@ -397,11 +397,11 @@ pods' `/readyz`), e.g. with a NetworkPolicy in `extraObjects`.
 
 The `ghcr.io/retyc/retyc-cli` release embedded in the controller image is pinned by `ARG RETYC_CLI_VERSION` in the
 `Dockerfile`, and the same version must be `mount.image.tag` in the chart (`make helm-lint` checks it). For a one-off
-build against another release, or a local CLI image:
+build against another release, or the development CLI (`make image-dev`, see [testing.md](testing.md)):
 
 ```sh
 make image RETYC_CLI_VERSION=v1.5.0-beta1
-make image RETYC_CLI_IMAGE=retyc-cli RETYC_CLI_VERSION=retycfs-v1.5.0-beta2
+make image RETYC_CLI_IMAGE=ghcr.io/retyc/retyc-cli-dev RETYC_CLI_VERSION=master
 ```
 
 The image is based on `debian:trixie-slim`, for the `mount` binary the bind mounts use, with CA certificates.
