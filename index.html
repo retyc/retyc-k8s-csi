@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RetycFS Helm charts</title>
+  <style>
+    :root { color-scheme: light dark; --bg: #fff; --fg: #1a1a1a; --muted: #666; --code: #f3f3f3; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #141414; --fg: #eaeaea; --muted: #999; --code: #222; } }
+    body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.6 system-ui, sans-serif; }
+    main, footer { max-width: 720px; margin: 0 auto; padding: 48px 16px; }
+    h1 { margin-top: 0; }
+    pre { background: var(--code); padding: 12px 16px; border-radius: 6px; overflow-x: auto; }
+    p.muted { color: var(--muted); }
+    a { color: inherit; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>RetycFS Helm charts</h1>
+    <p>Helm repository of the <a href="https://github.com/retyc/retycfs-k8s-csi">RetycFS CSI driver</a>:
+      ReadWriteMany Kubernetes volumes backed by end-to-end encrypted Retyc storage.</p>
+
+    <h2>Install</h2>
+    <pre><code>helm repo add retyc https://retyc.github.io/retycfs-k8s-csi
+helm repo update
+helm install retycfs-csi retyc/retycfs-csi --namespace kube-system</code></pre>
+
+    <p>Or from the OCI registry:</p>
+    <pre><code>helm install retycfs-csi oci://ghcr.io/retyc/charts/retycfs-csi --namespace kube-system</code></pre>
+
+    <p>Values and configuration: <a href="https://github.com/retyc/retycfs-k8s-csi/tree/master/charts/retycfs-csi">chart README</a>.
+      Repository index: <a href="index.yaml">index.yaml</a>.</p>
+  </main>
+  <footer>
+	  Powered by <a href="https://retyc.com/" target="_blank">Retyc</a> technologies.
+  </footer>
+</body>
+</html>
